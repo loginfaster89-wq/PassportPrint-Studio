@@ -6,6 +6,7 @@
 //   POST /api/signup           { name, email, password }        → { token, user }
 //   POST /api/login            { email, password }              → { token, user }
 //   GET  /api/me               (Bearer token)                    → { user }
+//   POST /api/delete-account   (Bearer token)                    → { ok: true }
 //   POST /api/create-order     (Bearer) { plan: 'weekly'|'monthly' }
 //                                                               → { orderId, amount, currency, keyId }
 //   POST /api/verify-payment   (Bearer) { orderId, paymentId, signature, plan }
@@ -421,6 +422,26 @@ app.post('/api/login', authLimiter, async (req, res) => {
 
 app.get('/api/me', authRequired, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+// Permanently delete the authenticated user's account and all associated data.
+// After this succeeds the same Gmail address can be used to sign up again.
+app.post('/api/delete-account', authRequired, (req, res) => {
+  try {
+    const uid = req.user.id;
+    const email = req.user.email;
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM downloads_daily WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM payments WHERE user_id = ?').run(uid);
+      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(email);
+      db.prepare('DELETE FROM users WHERE id = ?').run(uid);
+    });
+    tx();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('delete-account error:', e);
+    res.status(500).json({ error: 'Could not delete account' });
+  }
 });
 
 app.get('/api/download-status', authRequired, (req, res) => {
