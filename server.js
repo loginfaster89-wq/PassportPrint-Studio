@@ -26,6 +26,7 @@ const jwt           = require('jsonwebtoken');
 const Database      = require('better-sqlite3');
 const Razorpay      = require('razorpay');
 const rateLimit     = require('express-rate-limit');
+const nodemailer    = require('nodemailer');
 
 // ── Config ──
 const PORT                = parseInt(process.env.PORT || '4000', 10);
@@ -56,6 +57,31 @@ if (JWT_SECRET === 'dev-only-secret-change-me') {
 }
 if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
   console.warn('⚠️  Razorpay keys missing — payment endpoints will fail until configured.');
+}
+
+// ── SMTP / OTP ──
+const SMTP_HOST   = process.env.SMTP_HOST   || 'smtp.gmail.com';
+const SMTP_PORT   = parseInt(process.env.SMTP_PORT || '465', 10);
+const SMTP_SECURE = (process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
+const SMTP_USER   = process.env.SMTP_USER   || '';
+const SMTP_PASS   = process.env.SMTP_PASS   || '';
+const SMTP_FROM   = process.env.SMTP_FROM   || (SMTP_USER ? `PassportPrint Studio <${SMTP_USER}>` : '');
+const OTP_TTL_MS  = Math.max(60, parseInt(process.env.OTP_TTL_SEC || '600', 10)) * 1000;
+
+let mailer = null;
+if (SMTP_USER && SMTP_PASS) {
+  mailer = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: { user: SMTP_USER, pass: SMTP_PASS.replace(/\s+/g, '') },
+  });
+  mailer.verify().then(
+    () => console.log(`✓ SMTP ready (${SMTP_USER} via ${SMTP_HOST}:${SMTP_PORT})`),
+    (e) => console.warn('⚠️  SMTP verify failed:', e.message)
+  );
+} else {
+  console.warn('⚠️  SMTP not configured — OTP email verification will fail until SMTP_USER and SMTP_PASS are set.');
 }
 
 // ── DB ──
@@ -96,6 +122,16 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_downloads_user_day ON downloads_daily(user_id, day_key);
+
+  CREATE TABLE IF NOT EXISTS pending_signups (
+    email          TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    password_hash  TEXT NOT NULL,
+    otp_hash       TEXT NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    expires_at     INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL
+  );
 `);
 
 // ── Razorpay SDK (may throw if keys missing, guard at use site) ──
@@ -154,6 +190,34 @@ function publicUser(u) {
   };
 }
 function validEmail(s) { return typeof s === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); }
+// Only accept official @gmail.com addresses (owner request: trademark Gmail only).
+function validGmail(s) {
+  if (typeof s !== 'string') return false;
+  const lower = s.trim().toLowerCase();
+  // local-part: letters, digits, dot, underscore, plus, minus. Must start/end alnum.
+  return /^[a-z0-9][a-z0-9._+\-]{0,62}[a-z0-9]@gmail\.com$/.test(lower);
+}
+function genOtp() {
+  // 6-digit zero-padded numeric code.
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+async function sendOtpEmail(to, otp) {
+  if (!mailer) throw new Error('Email service not configured on server');
+  const subject = `Your PassportPrint Studio verification code: ${otp}`;
+  const text =
+`Your PassportPrint Studio verification code is: ${otp}
+
+This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.
+If you did not request this, please ignore this email.`;
+  const html = `
+<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#0d0d16;color:#e7e7f0;border-radius:12px;">
+  <h2 style="margin:0 0 12px;color:#fff;font-weight:700;">PassportPrint <em style="color:#7cc4ff;font-style:normal;">Studio</em></h2>
+  <p style="margin:0 0 16px;color:#bfbfd0;">Use the code below to verify your email address.</p>
+  <div style="font-family:ui-monospace,Menlo,monospace;font-size:32px;letter-spacing:8px;font-weight:700;background:#1a1a26;border:1px solid #2a2a38;border-radius:10px;padding:16px 20px;text-align:center;color:#fff;">${otp}</div>
+  <p style="margin:16px 0 0;color:#8c8ca0;font-size:12px;">This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes. If you did not request it, you can ignore this email.</p>
+</div>`;
+  await mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
+}
 
 function effectivePlan(user) {
   if (!user || !user.plan || user.plan === 'free') return 'free';
@@ -210,43 +274,142 @@ app.get('/api/plans', (req, res) => {
   });
 });
 
-app.post('/api/signup', authLimiter, async (req, res) => {
+// ── Signup flow (OTP-verified) ──────────────────────────────────────────────
+// Step 1: /api/send-signup-otp  — validates the Gmail address, stores a
+// pending signup (with hashed password + hashed OTP) and emails the OTP.
+// Step 2: /api/verify-signup-otp — checks the OTP and creates the user.
+app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
   try {
     const { name, email, password } = req.body || {};
-    if (!name || typeof name !== 'string' || name.length > 80) return res.status(400).json({ error: 'Invalid name' });
-    if (!validEmail(email))                                     return res.status(400).json({ error: 'Invalid email' });
-    if (!password || password.length < 6 || password.length > 200)
-      return res.status(400).json({ error: 'Password must be 6–200 chars' });
+    if (!name || typeof name !== 'string' || name.trim().length < 1 || name.length > 80) {
+      return res.status(400).json({ error: 'Please enter your name.' });
+    }
+    if (!validGmail(email)) {
+      return res.status(400).json({ error: 'Only @gmail.com addresses are accepted. Please use a valid Gmail account.' });
+    }
+    if (!password || password.length < 6 || password.length > 200) {
+      return res.status(400).json({ error: 'Password must be 6–200 characters.' });
+    }
+    if (!mailer) {
+      return res.status(503).json({ error: 'Email service is not configured on the server yet. Please try again later.' });
+    }
 
     const lower = email.trim().toLowerCase();
     const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
-    if (exists) return res.status(409).json({ error: 'Email already registered' });
+    if (exists) return res.status(409).json({ error: 'This Gmail is already registered. Please login instead.' });
 
-    const hash = await bcrypt.hash(password, 11);
+    const otp = genOtp();
+    const [otpHash, passwordHash] = await Promise.all([
+      bcrypt.hash(otp, 8),
+      bcrypt.hash(password, 11),
+    ]);
+    const now = Date.now();
+    const expiresAt = now + OTP_TTL_MS;
+    db.prepare(`
+      INSERT INTO pending_signups (email, name, password_hash, otp_hash, attempts, expires_at, created_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        name          = excluded.name,
+        password_hash = excluded.password_hash,
+        otp_hash      = excluded.otp_hash,
+        attempts      = 0,
+        expires_at    = excluded.expires_at,
+        created_at    = excluded.created_at
+    `).run(lower, name.trim(), passwordHash, otpHash, expiresAt, now);
+
+    try {
+      await sendOtpEmail(lower, otp);
+    } catch (ex) {
+      console.error('SMTP send failed:', ex && ex.message);
+      // Roll back pending signup so the user can retry cleanly.
+      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      return res.status(502).json({
+        error: 'We could not deliver a verification email to that Gmail address. Please check it and try again.',
+      });
+    }
+    res.json({
+      otpSent: true,
+      email: lower,
+      expiresInSec: Math.floor(OTP_TTL_MS / 1000),
+    });
+  } catch (e) {
+    console.error('send-signup-otp error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/verify-signup-otp', authLimiter, async (req, res) => {
+  try {
+    const { email, otp } = req.body || {};
+    if (!validGmail(email)) return res.status(400).json({ error: 'Invalid email.' });
+    const code = String(otp || '').trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the 6-digit code we emailed you.' });
+
+    const lower = email.trim().toLowerCase();
+    const pending = db.prepare('SELECT * FROM pending_signups WHERE email = ?').get(lower);
+    if (!pending) return res.status(400).json({ error: 'No pending verification. Please sign up again.' });
+
+    if (pending.expires_at < Date.now()) {
+      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      return res.status(400).json({ error: 'This code has expired. Please sign up again.' });
+    }
+    if (pending.attempts >= 5) {
+      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      return res.status(429).json({ error: 'Too many wrong attempts. Please sign up again.' });
+    }
+
+    const match = await bcrypt.compare(code, pending.otp_hash);
+    if (!match) {
+      db.prepare('UPDATE pending_signups SET attempts = attempts + 1 WHERE email = ?').run(lower);
+      return res.status(400).json({ error: 'Wrong code. Please try again.' });
+    }
+
+    // Defensive: make sure the user didn't get created in parallel.
+    const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
+    if (existing) {
+      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      const token = signToken(existing.id);
+      return res.json({ token, user: publicUser(existing) });
+    }
+
     const info = db.prepare(
       'INSERT INTO users (email, name, password_hash, plan, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(lower, name.trim(), hash, 'free', 0, Date.now());
+    ).run(lower, pending.name, pending.password_hash, 'free', 0, Date.now());
+    db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
 
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
     const token = signToken(user.id);
     res.json({ token, user: publicUser(user) });
   } catch (e) {
-    console.error('signup error:', e);
+    console.error('verify-signup-otp error:', e);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// Legacy signup endpoint. Kept for backwards compatibility: now transparently
+// kicks off the OTP flow so old clients still get a useful response.
+app.post('/api/signup', authLimiter, (req, res, next) => {
+  req.url = '/api/send-signup-otp';
+  next('route');
 });
 
 app.post('/api/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    if (!validEmail(email) || !password) return res.status(400).json({ error: 'Invalid credentials' });
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Please enter your Gmail address.' });
+    }
+    if (!validGmail(email)) {
+      return res.status(400).json({ error: 'Only @gmail.com addresses are accepted. Please use your Gmail account.' });
+    }
+    if (!password) return res.status(400).json({ error: 'Please enter your password.' });
 
     const lower = email.trim().toLowerCase();
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user) return res.status(404).json({ error: 'No account found with this Gmail. Please sign up first.' });
 
     const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!ok) return res.status(401).json({ error: 'Wrong password. Please try again.' });
 
     const token = signToken(user.id);
     res.json({ token, user: publicUser(user) });
