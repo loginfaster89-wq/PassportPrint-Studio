@@ -337,17 +337,19 @@ canvas{display:block;}
   z-index: 4;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
+  gap: 8px;
+  padding: 11px 20px;
   background: rgba(22,22,22,.9);
-  border: 1px solid rgba(240,165,0,.2);
-  border-radius: 40px;
+  border: 1px solid rgba(240,165,0,.25);
+  border-radius: 44px;
   font-family: 'DM Mono', monospace;
-  font-size: 11px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
   color: var(--text);
   white-space: nowrap;
   backdrop-filter: blur(12px);
-  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  box-shadow: 0 6px 26px rgba(0,0,0,.5);
   pointer-events: none;
   animation: chipFloat 4s ease-in-out infinite;
 }
@@ -812,7 +814,7 @@ canvas{display:block;}
         <!-- Floating feature chips around the card (desktop only) -->
         <div class="float-chip" style="top:12%;left:5%;animation-delay:0s;">🤖 AI Background Removal</div>
         <div class="float-chip" style="top:28%;right:4%;animation-delay:.7s;">📄 300 DPI Print-Ready</div>
-        <div class="float-chip" style="bottom:28%;left:4%;animation-delay:1.4s;">✂️ Smart Crop</div>
+        <div class="float-chip" style="bottom:8%;left:22%;animation-delay:1.4s;">✂️ Smart Crop</div>
         <div class="float-chip" style="bottom:14%;right:5%;animation-delay:2.1s;">🌍 6+ Country Sizes</div>
         <div class="float-chip" style="top:55%;left:3%;animation-delay:.35s;">⚡ Instant Download</div>
 
@@ -1433,18 +1435,63 @@ uploadZone.addEventListener('dragover',e=>{ e.preventDefault(); uploadZone.class
 uploadZone.addEventListener('dragleave',()=>uploadZone.classList.remove('drag-over'));
 uploadZone.addEventListener('drop',e=>{ e.preventDefault(); uploadZone.classList.remove('drag-over'); if(e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]); });
 
-function loadImage(file){
-  const url=URL.createObjectURL(file);
-  const img=new Image();
-  img.onload=()=>{
-    origImg=img;
+// Decode a file to an HTMLImageElement or ImageBitmap. Uses createImageBitmap
+// (async, off-main-thread) when available — keeps the UI responsive on heavy
+// multi-MB photos from WhatsApp / DSLR that would otherwise freeze the page.
+async function decodeImageFile(file){
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file);
+    } catch(_) { /* fall through to Image() path (e.g. HEIC) */ }
+  }
+  return await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image decode failed')); };
+    img.src = url;
+  });
+}
+
+// Downscale a huge source image to a sane working size. Passport photos never
+// need more than ~3000px on the long edge (AI model internally resizes to 2048,
+// final 300 DPI output for 40×60mm is 708px), so capping here prevents hangs
+// and 100+ MB canvas allocations on mobile without any visible quality loss.
+const WORKING_MAX = 3000;
+function normalizeOrigImage(src){
+  const sw = src.naturalWidth  || src.width;
+  const sh = src.naturalHeight || src.height;
+  const scale = Math.min(WORKING_MAX / sw, WORKING_MAX / sh, 1);
+  if (scale >= 1) return src; // small enough — use as-is
+  const dw = Math.round(sw * scale);
+  const dh = Math.round(sh * scale);
+  const c = document.createElement('canvas');
+  c.width = dw; c.height = dh;
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = 'high';
+  cx.drawImage(src, 0, 0, dw, dh);
+  // Free the decoded bitmap if possible
+  if (typeof src.close === 'function') { try { src.close(); } catch(_) {} }
+  return c;
+}
+
+async function loadImage(file){
+  try {
+    const decoded  = await decodeImageFile(file);
+    // Yield to the browser so the upload-zone click feedback can paint before
+    // the (potentially expensive) downscale step runs.
+    await new Promise(r => requestAnimationFrame(r));
+    origImg = normalizeOrigImage(decoded);
     goStep(2);                              // make step2-canvas visible FIRST
     requestAnimationFrame(()=>{
-      renderBgPreview(img);               // then read clientWidth correctly
+      renderBgPreview(origImg);           // then read clientWidth correctly
       requestAnimationFrame(()=>triggerFeatureLines()); // then draw lines after photo renders
     });
-  };
-  img.src=url;
+  } catch (err) {
+    console.error('[loadImage]', err);
+    alert('Image load nahi ho payi. Koi dusri photo try karein.');
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1479,6 +1526,26 @@ function selectPreset(el){
 }
 
 // ═══════════════════════════════════════════════
+// HI-DPI CANVAS HELPER
+// Sets a canvas's backing buffer to cssW × cssH × devicePixelRatio so that
+// preview canvases stay crisp on mobile / Retina displays (otherwise they
+// look blurry because the browser upscales a 1× buffer to a 2-3× screen).
+// Returns the draw dimensions — callers should keep drawing at (cssW × cssH).
+// ═══════════════════════════════════════════════
+function setupHiDPICanvas(cvs, cssW, cssH){
+  const dpr = Math.min(window.devicePixelRatio || 1, 3); // cap at 3× to avoid OOM on some phones
+  cvs.width  = Math.round(cssW * dpr);
+  cvs.height = Math.round(cssH * dpr);
+  cvs.style.width  = cssW + 'px';
+  cvs.style.height = cssH + 'px';
+  const ctx = cvs.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  return { ctx, dpr, cssW, cssH };
+}
+
+// ═══════════════════════════════════════════════
 // BG PREVIEW
 // ═══════════════════════════════════════════════
 function renderBgPreview(imgOrCanvas){
@@ -1489,11 +1556,11 @@ function renderBgPreview(imgOrCanvas){
   const sw=imgOrCanvas.naturalWidth||imgOrCanvas.width;
   const sh=imgOrCanvas.naturalHeight||imgOrCanvas.height;
   const scale=Math.min(mw/sw,mh/sh); // no ,1 cap — allow upscaling small images
-  cvs.width=Math.round(sw*scale);
-  cvs.height=Math.round(sh*scale);
-  const ctx=cvs.getContext('2d');
-  drawChecker(ctx,0,0,cvs.width,cvs.height);
-  ctx.drawImage(imgOrCanvas,0,0,cvs.width,cvs.height);
+  const cssW=Math.round(sw*scale);
+  const cssH=Math.round(sh*scale);
+  const { ctx } = setupHiDPICanvas(cvs, cssW, cssH);
+  drawChecker(ctx,0,0,cssW,cssH);
+  ctx.drawImage(imgOrCanvas,0,0,cssW,cssH);
 }
 
 // ═══════════════════════════════════════════════
@@ -1889,15 +1956,14 @@ function showComparisonSlider(origSrc, resultCanvas){
   const scale = Math.min(mw/sw, mh/sh); // no ,1 — allow upscaling
   const dw = Math.round(sw*scale), dh = Math.round(sh*scale);
 
-  // Set both canvases to same size
-  [origCvs, resCvs].forEach(c => { c.width = dw; c.height = dh; });
+  // Set both canvases to same size, DPR-aware for crisp rendering on mobile
+  const { ctx: octx } = setupHiDPICanvas(origCvs, dw, dh);
+  const { ctx: rctx } = setupHiDPICanvas(resCvs,  dw, dh);
 
   // Draw original (scaled) on origCvs
-  const octx = origCvs.getContext('2d');
   octx.drawImage(origSrc, 0, 0, dw, dh);
 
   // Draw result (with BG) on resCvs
-  const rctx = resCvs.getContext('2d');
   rctx.drawImage(resultCanvas, 0, 0, dw, dh);
 
   // Size container
@@ -2139,8 +2205,10 @@ function initCropCanvas(){
   dispW=Math.round(src.width*scale);
   dispH=Math.round(src.height*scale);
   dispScale=scale;
-  cropCvs.width=dispW;
-  cropCvs.height=dispH;
+  // DPR-aware backing buffer — keeps cropCanvas sharp on mobile / Retina.
+  // Draw calls still use (dispW × dispH) logical coords because the context
+  // transform below maps them to the physical pixels.
+  setupHiDPICanvas(cropCvs, dispW, dispH);
 
   // Default crop: center, passport aspect ratio
   const aspect=photoW/photoH;
@@ -2247,7 +2315,7 @@ function setupCropEvents(){
   cropCvs.ontouchend=()=>cropCvs.onmouseup();
 }
 
-function pos(e){ const r=cropCvs.getBoundingClientRect(); return {x:(e.clientX-r.left)*(cropCvs.width/r.width),y:(e.clientY-r.top)*(cropCvs.height/r.height)}; }
+function pos(e){ const r=cropCvs.getBoundingClientRect(); return {x:(e.clientX-r.left)*(dispW/r.width),y:(e.clientY-r.top)*(dispH/r.height)}; }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
 
 function doResize(dir,mx,my){
@@ -2420,15 +2488,16 @@ function buildSheet(){
 
   _sheetFullRes=sheet;
 
-  // Preview
+  // Preview — DPR-aware so the A4 thumbnail stays crisp on mobile / Retina
   const previewCvs=document.getElementById('sheetCanvas');
   const wrap=document.getElementById('step4-canvas');
   const mw=(wrap.clientWidth||720)-40;
   const mh=(wrap.clientHeight||560)-40;
   const scale=Math.min(mw/a4W,mh/a4H);
-  previewCvs.width=Math.round(a4W*scale);
-  previewCvs.height=Math.round(a4H*scale);
-  previewCvs.getContext('2d').drawImage(sheet,0,0,previewCvs.width,previewCvs.height);
+  const cssW=Math.round(a4W*scale);
+  const cssH=Math.round(a4H*scale);
+  const { ctx: pctx } = setupHiDPICanvas(previewCvs, cssW, cssH);
+  pctx.drawImage(sheet,0,0,cssW,cssH);
 
   // Info
   const actualPwMm=(pW/DPI*MM2IN).toFixed(1);
