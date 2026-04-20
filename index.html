@@ -1,0 +1,2635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PassportPrint Studio — Free Passport Photo Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<!-- AI library loads lazily on first use via dynamic import -->
+<style>
+:root {
+  --bg: #0d0d0d;
+  --surface: #161616;
+  --surface2: #1e1e1e;
+  --surface3: #272727;
+  --border: #2c2c2c;
+  --accent: #f0a500;
+  --accent-dim: rgba(240,165,0,0.12);
+  --accent-glow: rgba(240,165,0,0.06);
+  --text: #e8e8e8;
+  --muted: #777;
+  --muted2: #555;
+  --success: #4ade80;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --sidebar-w: 310px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+}
+html{font-size:14px;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
+
+/* ── HEADER ── */
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 16px;height:52px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
+.logo{font-family:'Syne',sans-serif;font-weight:800;font-size:19px;letter-spacing:-0.5px;white-space:nowrap;}
+.logo em{color:var(--accent);font-style:normal;}
+.badges{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap;}
+.badge{font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid;white-space:nowrap;}
+.badge-green{border-color:rgba(74,222,128,.3);color:var(--success);background:rgba(74,222,128,.06);}
+.badge-amber{border-color:rgba(240,165,0,.3);color:var(--accent);background:var(--accent-dim);}
+
+/* ── STEPS BAR ── */
+.steps{background:var(--surface);border-bottom:1px solid var(--border);display:flex;flex-shrink:0;overflow-x:auto;}
+.steps::-webkit-scrollbar{display:none;}
+.step{display:flex;align-items:center;gap:8px;padding:11px 18px;font-size:12px;color:var(--muted2);border-right:1px solid var(--border);cursor:default;transition:.2s;white-space:nowrap;flex-shrink:0;}
+.step.active{color:var(--accent);background:var(--accent-glow);}
+.step.done{color:var(--success);}
+.step-num{width:20px;height:20px;border-radius:50%;border:1.5px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;}
+.step.done .step-num::after{content:'✓';}
+
+/* ── MAIN LAYOUT ── */
+.main{display:grid;grid-template-columns:1fr var(--sidebar-w);flex:1;overflow:hidden;min-height:0;}
+
+/* ── CANVAS AREA ── */
+.canvas-area{background:#080808;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;min-height:0;}
+
+/* ── UPLOAD ZONE ── */
+.upload-zone{border:2px dashed var(--border);border-radius:14px;padding:40px 32px;text-align:center;transition:.2s;position:relative;max-width:440px;width:90%;}
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--accent);background:var(--accent-glow);}
+/* File input only covers the inner card, not the whole canvas area */
+.upload-inner-card input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;z-index:10;}
+.upload-icon{font-size:44px;display:block;margin-bottom:12px;animation:float 3s ease-in-out infinite;}
+@keyframes float{0%,100%{transform:translateY(0);}50%{transform:translateY(-6px);}}
+.upload-title{font-family:'Syne',sans-serif;font-weight:700;font-size:22px;margin-bottom:8px;}
+.upload-sub{color:var(--muted);font-size:13px;line-height:1.7;}
+
+/* ── SIDEBAR ── */
+.sidebar{background:var(--surface);border-left:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column;min-height:0;}
+.sb-section{padding:15px;border-bottom:1px solid var(--border);}
+.sb-title{font-family:'Syne',sans-serif;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin-bottom:11px;}
+
+/* ── BUTTONS ── */
+.btn{width:100%;padding:10px 15px;border:none;border-radius:7px;font-family:'DM Mono',monospace;font-size:13px;font-weight:500;cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:7px;}
+.btn+.btn{margin-top:7px;}
+.btn-primary{background:var(--accent);color:#000;}
+.btn-primary:hover:not(:disabled){background:#ffc03a;transform:translateY(-1px);}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.btn-secondary:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border);}
+.btn-ghost:hover:not(:disabled){color:var(--text);}
+.btn-danger{background:rgba(248,113,113,.15);color:var(--danger);border:1px solid rgba(248,113,113,.3);}
+.btn-danger:hover:not(:disabled){background:rgba(248,113,113,.25);}
+.btn:disabled{opacity:.35;cursor:not-allowed;transform:none!important;}
+
+/* ── PRESETS ── */
+.preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
+.preset-btn{padding:10px 6px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;cursor:pointer;font-family:'DM Mono',monospace;font-size:12px;color:var(--text);text-align:center;line-height:1.5;transition:.15s;}
+.preset-btn:hover,.preset-btn.active{border-color:var(--accent);color:var(--accent);background:var(--accent-dim);}
+.preset-size{font-size:11px;color:var(--muted);}
+
+/* ── SLIDERS ── */
+.slider-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.slider-label{font-size:12px;color:var(--muted);width:76px;flex-shrink:0;}
+.slider-val{font-size:12px;color:var(--accent);width:30px;text-align:right;flex-shrink:0;}
+input[type=range]{flex:1;appearance:none;height:3px;background:var(--border);border-radius:2px;outline:none;}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 6px rgba(240,165,0,.4);}
+
+/* ── COLOR SWATCHES ── */
+.swatches{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.swatch{width:30px;height:30px;border-radius:6px;cursor:pointer;border:2px solid transparent;transition:.15s;flex-shrink:0;}
+.swatch:hover{transform:scale(1.08);}
+.swatch.active{border-color:var(--accent);transform:scale(1.1);}
+.swatch-checker{background-image:linear-gradient(45deg,#333 25%,transparent 25%),linear-gradient(-45deg,#333 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#333 75%),linear-gradient(-45deg,transparent 75%,#333 75%);background-size:8px 8px;background-position:0 0,0 4px,4px -4px,-4px 0;}
+.swatch-custom{background:var(--surface3);border:1px solid var(--border)!important;display:flex;align-items:center;justify-content:center;font-size:13px;position:relative;overflow:hidden;}
+.swatch-custom input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+
+/* ── PROGRESS ── */
+.progress-wrap{background:var(--surface3);border-radius:3px;height:5px;overflow:hidden;margin:8px 0;}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),#ffc03a);border-radius:3px;transition:width .4s ease;width:0%;}
+.status-text{font-size:12px;color:var(--muted);text-align:center;margin-bottom:4px;}
+
+/* ── INFO BOX ── */
+.info-box{background:var(--accent-dim);border:1px solid rgba(240,165,0,.15);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.75;}
+.info-box strong{color:var(--accent);}
+.info-box.blue{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.2);}
+.info-box.blue strong{color:var(--info);}
+
+/* ── COUNT SELECTORS ── */
+.count-row{display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap;}
+.count-btn{flex:1;min-width:28px;padding:8px 3px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;font-size:12px;color:var(--muted);text-align:center;transition:.15s;}
+.count-btn:hover,.count-btn.active{border-color:var(--accent);color:var(--accent);background:var(--accent-dim);}
+
+/* ── CANVAS HINTS ── */
+.canvas-hint{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:var(--muted);font-size:12px;padding:6px 14px;border-radius:20px;backdrop-filter:blur(8px);white-space:nowrap;pointer-events:none;}
+
+/* ── COMPARISON SLIDER ── */
+#comparisonWrap{
+  position:relative;width:100%;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.comp-container{
+  position:relative;
+  display:inline-block;
+  cursor:col-resize;
+  user-select:none;
+  border-radius:8px;
+  overflow:hidden;
+  box-shadow:0 0 40px rgba(0,0,0,.7);
+}
+.comp-canvas-orig,.comp-canvas-result{
+  display:block;
+  max-width:100%;
+  max-height:100%;
+}
+.comp-canvas-orig{
+  position:absolute;
+  top:0;left:0;
+  pointer-events:none;
+}
+/* clip the original to left of slider */
+.comp-clip{
+  position:absolute;
+  top:0;left:0;height:100%;
+  overflow:hidden;
+  pointer-events:none;
+}
+.comp-clip canvas{display:block;}
+
+/* Divider line */
+.comp-divider{
+  position:absolute;top:0;
+  width:2px;
+  height:100%;
+  background:#fff;
+  box-shadow:0 0 8px rgba(0,0,0,.7);
+  pointer-events:none;
+  z-index:10;
+}
+.comp-handle{
+  position:absolute;
+  top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:42px;height:42px;
+  background:var(--accent);
+  border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;
+  color:#000;
+  font-weight:900;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);
+  cursor:col-resize;
+  z-index:11;
+  flex-shrink:0;
+  letter-spacing:-1px;
+}
+/* Label overlays */
+.comp-label{
+  position:absolute;
+  bottom:12px;
+  background:rgba(0,0,0,.65);
+  color:#fff;
+  font-size:11px;
+  font-family:'DM Mono',monospace;
+  padding:4px 10px;
+  border-radius:20px;
+  backdrop-filter:blur(6px);
+  pointer-events:none;
+  z-index:12;
+  white-space:nowrap;
+}
+.comp-label-left{left:12px;}
+.comp-label-right{right:12px;}
+
+.hidden{display:none!important;}
+.mt6{margin-top:6px;}
+.mt10{margin-top:10px;}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+canvas{display:block;}
+#cropCanvas{cursor:crosshair;}
+#sheetCanvas{box-shadow:0 0 40px rgba(0,0,0,.7);max-width:100%;max-height:100%;}
+.tips{font-size:12px;color:var(--muted);line-height:2.1;}
+.tips span{display:block;}
+
+/* ════════════════════════════════════
+   DESIGN UPGRADE — ANIMATIONS & POLISH
+════════════════════════════════════ */
+
+/* ── Canvas area dot-grid background ── */
+.canvas-area{
+  background:
+    radial-gradient(circle, rgba(240,165,0,0.04) 1px, transparent 1px),
+    #080808;
+  background-size: 28px 28px;
+}
+
+/* ── Step fade-in transition ── */
+@keyframes stepFadeIn {
+  from { opacity:0; transform:translateY(8px); }
+  to   { opacity:1; transform:translateY(0);   }
+}
+.step-fade { animation: stepFadeIn 0.35s cubic-bezier(0.4,0,0.2,1) both; }
+
+/* ── Upload zone redesign — FULL CANVAS FILL ── */
+.upload-zone {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  background: transparent;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.upload-zone:hover { transform: none; box-shadow: none; }
+.upload-zone::before, .upload-zone::after { display:none; }
+
+/* Inner card — centered, floating (fluid). Only this is clickable. */
+.upload-inner-card {
+  position: relative;
+  z-index: 3;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: clamp(24px, 4vw, 44px) clamp(22px, 5vw, 48px) clamp(22px, 4vw, 36px);
+  max-width: 520px;
+  width: min(92%, 520px);
+  text-align: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  transition: transform .25s, box-shadow .25s, border-color .25s;
+  cursor: pointer;
+}
+.upload-zone:hover .upload-inner-card,
+.upload-zone.drag-over .upload-inner-card {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(240,165,0,.3);
+  border-color: rgba(240,165,0,.3);
+}
+
+/* Spinning gradient border on card */
+@property --bangle { syntax:'<angle>'; initial-value:0deg; inherits:false; }
+.upload-inner-card::before {
+  content:'';
+  position:absolute;
+  inset:-2px;
+  border-radius:22px;
+  background: conic-gradient(from var(--bangle), transparent 20%, var(--accent) 45%, #ffc03a 50%, var(--accent) 55%, transparent 80%);
+  z-index:0;
+  animation: rotateBorder 4s linear infinite;
+}
+.upload-inner-card::after {
+  content:'';
+  position:absolute;
+  inset:2px;
+  border-radius:18px;
+  background: var(--surface);
+  z-index:1;
+}
+@keyframes rotateBorder { to { --bangle: 360deg; } }
+.upload-inner-card > *:not(input[type=file]) { position:relative; z-index:2; }
+.upload-zone.drag-over .upload-inner-card::before {
+  animation: rotateBorder .8s linear infinite;
+}
+
+/* Corner accent brackets */
+.corner-bracket {
+  position: absolute;
+  width: 32px; height: 32px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.18;
+  transition: opacity .35s;
+}
+.upload-zone:hover .corner-bracket,
+.upload-zone.drag-over .corner-bracket { opacity: 0.65; }
+.cb-tl { top:18px; left:18px; border-top:2px solid var(--accent); border-left:2px solid var(--accent); border-radius:4px 0 0 0; }
+.cb-tr { top:18px; right:18px; border-top:2px solid var(--accent); border-right:2px solid var(--accent); border-radius:0 4px 0 0; }
+.cb-bl { bottom:18px; left:18px; border-bottom:2px solid var(--accent); border-left:2px solid var(--accent); border-radius:0 0 0 4px; }
+.cb-br { bottom:18px; right:18px; border-bottom:2px solid var(--accent); border-right:2px solid var(--accent); border-radius:0 0 4px 0; }
+
+/* Drag-over full overlay pulse */
+.upload-zone.drag-over::before {
+  display: block !important;
+  content:'';
+  position:absolute;
+  inset:0;
+  border:2px dashed var(--accent);
+  border-radius: 0;
+  background: rgba(240,165,0,.04);
+  z-index:2;
+  animation: none;
+}
+
+/* ── Floating feature chips around upload card ── */
+.float-chip {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  background: rgba(22,22,22,.9);
+  border: 1px solid rgba(240,165,0,.25);
+  border-radius: 44px;
+  font-family: 'DM Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  color: var(--text);
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 26px rgba(0,0,0,.5);
+  pointer-events: none;
+  animation: chipFloat 4s ease-in-out infinite;
+}
+@keyframes chipFloat {
+  0%,100% { transform: translateY(0px); opacity:.75; }
+  50%      { transform: translateY(-6px); opacity:1; }
+}
+/* Hide floating chips on anything smaller than a wide laptop —
+   they overlap the upload card at mid-sized widths. */
+@media(max-width:1180px){ .float-chip { display:none; } }
+
+/* Hide the post-upload radiating feature lines + chips on phones —
+   they look cramped and weird around vertical photos on small screens. */
+@media(max-width:768px){
+  #featLinesSVG { display:none !important; }
+  .feat-chip    { display:none !important; }
+}
+
+/* Camera SVG icon animation */
+.upload-icon-wrap {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:72px;
+  height:72px;
+  margin:0 auto 18px;
+  border-radius:50%;
+  background: var(--accent-dim);
+  border: 1.5px solid rgba(240,165,0,.25);
+  animation: iconFloat 3s ease-in-out infinite;
+}
+.upload-icon-wrap svg { width:34px; height:34px; }
+@keyframes iconFloat {
+  0%,100% { transform:translateY(0) scale(1); }
+  50%      { transform:translateY(-5px) scale(1.04); }
+}
+
+/* Upload feature pills */
+.upload-feats {
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  justify-content:center;
+  margin-top:14px;
+}
+.upload-feat-pill {
+  font-size:10px;
+  color:var(--muted);
+  padding:3px 9px;
+  border-radius:20px;
+  border:1px solid var(--border);
+  background:var(--surface2);
+  white-space:nowrap;
+}
+
+/* ── Enhanced buttons ── */
+.btn-primary {
+  position:relative;
+  overflow:hidden;
+  box-shadow: 0 4px 15px rgba(240,165,0,0.15);
+  transition: .15s, box-shadow .15s;
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 6px 25px rgba(240,165,0,0.35);
+}
+.btn-primary::after {
+  content:'';
+  position:absolute;
+  inset:0;
+  background:linear-gradient(105deg,transparent 40%,rgba(255,255,255,.12) 50%,transparent 60%);
+  transform:translateX(-100%);
+  transition: transform .4s;
+}
+.btn-primary:hover::after { transform:translateX(100%); }
+
+/* ── Progress bar shimmer ── */
+.progress-bar {
+  background: linear-gradient(90deg,var(--accent) 0%,#ffc03a 50%,var(--accent) 100%);
+  background-size: 200% 100%;
+  animation: shimmerBar 1.5s linear infinite;
+}
+@keyframes shimmerBar {
+  0%   { background-position:200% 0; }
+  100% { background-position:-200% 0; }
+}
+
+/* ── Feature lines (radiating from photo on upload) ── */
+#featLinesSVG { position:absolute;top:0;left:0;pointer-events:none;z-index:1;overflow:visible; }
+
+.feat-chip {
+  position:absolute;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:5px 11px 5px 8px;
+  border-radius:20px;
+  background: rgba(13,13,13,.85);
+  border: 1px solid rgba(240,165,0,.25);
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  color:var(--text);
+  white-space:nowrap;
+  backdrop-filter:blur(10px);
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+  pointer-events:none;
+  z-index:5;
+  opacity:0;
+}
+.feat-icon { font-size:13px; line-height:1; }
+
+@keyframes featDraw {
+  from { stroke-dashoffset: var(--len); }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes featLineDraw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes featDotPop {
+  0%   { opacity:0; transform:scale(0); }
+  60%  { opacity:1; transform:scale(1.4); }
+  100% { opacity:1; transform:scale(1); }
+}
+@keyframes featChipIn {
+  0%   { opacity:0; transform:translate(var(--cx), var(--cy)) scale(0.75); }
+  100% { opacity:1; transform:translate(var(--cx), var(--cy)) scale(1); }
+}
+
+/* ── Sidebar hover glow ── */
+.sb-section:hover { background:rgba(240,165,0,.015); }
+.preset-btn { transition:.15s; }
+.count-btn  { transition:.15s; }
+
+/* ── Step num pulse on active ── */
+.step.active .step-num {
+  box-shadow: 0 0 0 3px rgba(240,165,0,.12);
+  animation: stepNumPulse 2s ease-in-out infinite;
+}
+@keyframes stepNumPulse {
+  0%,100% { box-shadow:0 0 0 3px rgba(240,165,0,.12); }
+  50%      { box-shadow:0 0 0 6px rgba(240,165,0,.04); }
+}
+
+/* ── bgCanvas hover shadow ── */
+#bgCanvas { border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.6); transition:box-shadow .3s; }
+
+
+/* ── LANGUAGE TOGGLE ── */
+.lang-toggle{display:flex;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px;gap:2px;flex-shrink:0;}
+.lang-btn{padding:4px 12px;border-radius:16px;font-family:'DM Mono',monospace;font-size:12px;font-weight:600;cursor:pointer;border:none;background:transparent;color:var(--muted);transition:.2s;letter-spacing:.5px;}
+.lang-btn.active{background:var(--accent);color:#000;}
+
+/* ── HELP BUTTON ── */
+.help-btn{width:30px;height:30px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:.2s;}
+.help-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* ── TUTORIAL OVERLAY ── */
+#tutorialPage{
+  position:fixed;inset:0;z-index:999;
+  background:var(--bg);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+.tut-header{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:0 20px;height:52px;
+  display:flex;align-items:center;gap:16px;
+  flex-shrink:0;
+}
+.tut-back{
+  display:flex;align-items:center;gap:8px;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;padding:6px 14px;
+  color:var(--text);font-family:'DM Mono',monospace;font-size:12px;
+  cursor:pointer;transition:.15s;
+}
+.tut-back:hover{border-color:var(--accent);color:var(--accent);}
+.tut-title{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;}
+.tut-title em{color:var(--accent);font-style:normal;}
+
+.tut-body{flex:1;overflow-y:auto;padding:32px 24px;max-width:860px;margin:0 auto;width:100%;}
+
+/* Progress line */
+.tut-steps-line{display:flex;align-items:center;margin-bottom:32px;gap:0;}
+.tut-step-dot{width:32px;height:32px;border-radius:50%;background:var(--surface2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:700;font-size:12px;color:var(--muted);flex-shrink:0;z-index:1;}
+.tut-step-dot.done{background:var(--accent);border-color:var(--accent);color:#000;}
+.tut-step-line{flex:1;height:2px;background:var(--border);}
+.tut-step-line.done{background:var(--accent);}
+
+/* Step cards */
+.tut-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:24px;
+  margin-bottom:20px;
+  display:flex;gap:24px;
+  transition:.2s;
+}
+.tut-card:hover{border-color:rgba(240,165,0,.3);}
+.tut-card-left{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:8px;}
+.tut-step-badge{
+  width:40px;height:40px;border-radius:50%;
+  background:var(--accent);color:#000;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:16px;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.tut-card-right{flex:1;min-width:0;}
+.tut-card-title{font-family:'Syne',sans-serif;font-weight:700;font-size:15px;margin-bottom:6px;color:var(--text);}
+.tut-card-desc{font-size:11px;color:var(--muted);line-height:1.8;margin-bottom:14px;}
+
+/* Mockup screens inside tutorial */
+.mock-screen{
+  background:#1a1a2e;
+  border:1px solid #2a2a4a;
+  border-radius:10px;
+  overflow:hidden;
+  font-family:'DM Mono',monospace;
+}
+.mock-bar{
+  background:#0f0f23;
+  padding:8px 12px;
+  display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid #2a2a4a;
+}
+.mock-dots{display:flex;gap:5px;}
+.mock-dot{width:10px;height:10px;border-radius:50%;}
+.mock-url{flex:1;background:#1e1e3a;border-radius:4px;padding:4px 10px;font-size:10px;color:#7070a0;}
+.mock-nav{display:flex;gap:0;background:#0d0d1f;padding:0 16px;border-bottom:1px solid #2a2a4a;}
+.mock-nav-item{padding:10px 14px;font-size:10px;color:#6060a0;cursor:pointer;border-bottom:2px solid transparent;}
+.mock-nav-item.hi{color:#00d4aa;border-bottom-color:#00d4aa;}
+.mock-body{padding:16px;}
+.mock-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--accent);color:#000;
+  border-radius:6px;padding:7px 14px;font-size:11px;font-weight:700;
+  cursor:pointer;font-family:'DM Mono',monospace;
+  border:none;
+}
+.mock-btn.outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.mock-input-row{display:flex;gap:8px;align-items:center;margin-top:10px;}
+.mock-input{
+  flex:1;background:#0f0f23;border:1px solid #3a3a6a;
+  border-radius:6px;padding:8px 12px;font-size:10px;color:#a0a0c0;
+  font-family:'DM Mono',monospace;
+}
+.mock-key-box{
+  background:#0a1a0a;border:1px solid #1a4a1a;
+  border-radius:8px;padding:12px;margin-top:10px;
+  display:flex;align-items:center;gap:10px;
+}
+.mock-key-text{font-size:10px;color:#4ade80;flex:1;word-break:break-all;}
+.mock-copy-btn{
+  background:#1a3a1a;border:1px solid #2a5a2a;
+  border-radius:5px;padding:5px 10px;font-size:10px;color:#4ade80;
+  cursor:pointer;white-space:nowrap;
+}
+.mock-highlight{
+  border:2px solid var(--accent);
+  border-radius:6px;
+  position:relative;
+  animation:pulse-border 1.5s ease-in-out infinite;
+}
+@keyframes pulse-border{
+  0%,100%{border-color:var(--accent);}
+  50%{border-color:rgba(240,165,0,.3);}
+}
+.mock-arrow{
+  font-size:20px;margin:8px 0;display:block;text-align:center;
+  animation:bounce-down .8s ease-in-out infinite;
+}
+@keyframes bounce-down{0%,100%{transform:translateY(0);}50%{transform:translateY(4px);}}
+
+/* Tip box */
+.tut-tip{
+  background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.2);
+  border-radius:8px;padding:12px 14px;font-size:10px;color:var(--muted);
+  line-height:1.8;margin-top:10px;
+}
+.tut-tip strong{color:var(--info);}
+
+/* Final CTA */
+.tut-cta{
+  background:linear-gradient(135deg,rgba(240,165,0,.15),rgba(240,165,0,.05));
+  border:1px solid rgba(240,165,0,.3);
+  border-radius:14px;padding:24px;text-align:center;margin-top:24px;
+}
+.tut-cta-title{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;margin-bottom:8px;}
+.tut-cta-title em{color:var(--accent);font-style:normal;}
+
+@media(max-width:640px){
+  .tut-card{flex-direction:column;gap:14px;padding:16px;}
+  .tut-body{padding:16px 12px;}
+  .tut-steps-line{display:none;}
+}
+
+/* ── MOBILE BOTTOM DRAWER ── */
+.mob-sb-toggle{display:none;}
+
+/* ════════════════════════════════════
+   RESPONSIVE BREAKPOINTS
+════════════════════════════════════ */
+
+/* ── LAPTOP (≤1180px) ── */
+@media(max-width:1180px){
+  :root{--sidebar-w:280px;}
+}
+
+/* ── SMALL LAPTOP (≤1024px) ── */
+@media(max-width:1024px){
+  :root{--sidebar-w:250px;}
+  .badge:nth-child(n+3){display:none;}
+  .upload-icon-wrap{width:64px;height:64px;margin-bottom:14px;}
+  .upload-icon-wrap svg{width:30px;height:30px;}
+}
+
+/* ── TABLET (≤900px) ── */
+@media(max-width:900px){
+  :root{--sidebar-w:240px;}
+  .badges{display:none;}
+  .sb-section{padding:12px;}
+  .preset-btn{font-size:11px;padding:9px 5px;}
+}
+
+/* ── SMALL TABLET (≤768px) ── */
+@media(max-width:768px){
+  header{padding:0 12px;gap:8px;}
+  .logo{font-size:16px;}
+
+  /* Stack layout: canvas on top, sidebar below */
+  .main{
+    grid-template-columns:1fr;
+    grid-template-rows:minmax(0,1fr) auto;
+  }
+  .canvas-area{min-height:300px;}
+
+  .sidebar{
+    border-left:none;
+    border-top:2px solid var(--border);
+    max-height:50dvh;
+    overflow-y:auto;
+  }
+  .sidebar::before{
+    content:'';
+    display:block;
+    width:36px;height:4px;
+    background:var(--border);
+    border-radius:2px;
+    margin:8px auto 2px;
+  }
+
+  .preset-grid{grid-template-columns:repeat(3,1fr);}
+}
+
+/* ── MOBILE (≤640px) ── */
+@media(max-width:640px){
+  html{font-size:13px;}
+  body{overflow:hidden;}
+  header{height:44px;padding:0 10px;}
+  .logo{font-size:14px;}
+  .badges{display:none;}
+
+  .step .step-label{display:none;}
+  .step{padding:8px 12px;font-size:11px;}
+  .step-num{width:18px;height:18px;font-size:9px;}
+
+  .sidebar{max-height:48dvh;}
+  .sb-section{padding:10px 12px;}
+  .sb-title{font-size:10px;margin-bottom:8px;}
+
+  .preset-grid{grid-template-columns:repeat(3,1fr);gap:5px;}
+  .preset-btn{padding:8px 4px;font-size:10px;}
+  .preset-size{font-size:9px;}
+
+  .btn{padding:9px 12px;font-size:12px;}
+  .slider-label{width:64px;font-size:11px;}
+
+  .upload-icon-wrap{width:56px;height:56px;margin-bottom:12px;}
+  .upload-icon-wrap svg{width:26px;height:26px;}
+  .upload-title{font-size:17px!important;}
+  .upload-sub{font-size:12px;}
+  .upload-feat-pill{font-size:9px;padding:2px 7px;}
+
+  .canvas-hint{font-size:9px;bottom:6px;padding:4px 10px;}
+
+  .comp-handle{width:36px;height:36px;font-size:13px;}
+  .comp-label{font-size:10px;padding:3px 8px;}
+  .comp-label-left{left:8px;bottom:8px;}
+  .comp-label-right{right:8px;bottom:8px;}
+
+  .lang-toggle{padding:2px;}
+  .lang-btn{padding:3px 9px;font-size:11px;}
+}
+
+/* ── SMALL MOBILE (≤420px) ── */
+@media(max-width:420px){
+  header{gap:6px;}
+  .logo{font-size:13px;}
+  .step{padding:7px 9px;}
+  .preset-grid{grid-template-columns:repeat(2,1fr);}
+  .upload-feats{gap:4px;}
+  .upload-feat-pill{font-size:9px;padding:2px 6px;}
+}
+
+/* ── TINY MOBILE (≤360px) ── */
+@media(max-width:360px){
+  html{font-size:12px;}
+  .step{padding:6px 7px;}
+  .sb-section{padding:9px 10px;}
+  .preset-grid{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">Passport<em>Print</em> Studio</div>
+  <div class="badges">
+    <span class="badge badge-green" data-i18n="badge_free">✓ 100% Free</span>
+    <span class="badge badge-green" data-i18n="badge_offline">✓ Offline After First Load</span>
+    <span class="badge badge-amber" data-i18n="badge_ai">✓ AI BG Removal</span>
+    <span class="badge badge-amber">✓ 300 DPI</span>
+  </div>
+  <!-- Language + Help -->
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-shrink:0;">
+    <div class="lang-toggle">
+      <button class="lang-btn active" onclick="setLang('hi')">HI</button>
+      <button class="lang-btn" onclick="setLang('en')">EN</button>
+    </div>
+    <button class="help-btn" onclick="openTutorial()" title="API Key Tutorial" style="display:none;">?</button>
+  </div>
+</header>
+
+<!-- STEPS BAR -->
+<div class="steps">
+  <div class="step active" id="tab1"><div class="step-num">1</div><span class="step-label" data-i18n="step1">Photo Upload</span></div>
+  <div class="step" id="tab2"><div class="step-num">2</div><span class="step-label" data-i18n="step2">Background Hatao</span></div>
+  <div class="step" id="tab3"><div class="step-num">3</div><span class="step-label" data-i18n="step3">Crop & Adjust</span></div>
+  <div class="step" id="tab4"><div class="step-num">4</div><span class="step-label" data-i18n="step4">A4 Sheet Banao</span></div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- CANVAS AREA -->
+  <div class="canvas-area" id="canvasArea">
+
+    <!-- Global animated background canvas (floating particles + lines) — shown on ALL steps -->
+    <canvas id="uploadBgCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:0.45;"></canvas>
+
+    <!-- Step 1: Upload -->
+    <div id="step1-canvas" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;position:relative;z-index:1;">
+      <div class="upload-zone" id="uploadZone">
+        <!-- Corner brackets -->
+        <div class="corner-bracket cb-tl"></div>
+        <div class="corner-bracket cb-tr"></div>
+        <div class="corner-bracket cb-bl"></div>
+        <div class="corner-bracket cb-br"></div>
+
+        <!-- Floating feature chips around the card (desktop only) -->
+        <div class="float-chip" style="top:12%;left:5%;animation-delay:0s;">🤖 AI Background Removal</div>
+        <div class="float-chip" style="top:28%;right:4%;animation-delay:.7s;">📄 300 DPI Print-Ready</div>
+        <div class="float-chip" style="bottom:8%;left:22%;animation-delay:1.4s;">✂️ Smart Crop</div>
+        <div class="float-chip" style="bottom:14%;right:5%;animation-delay:2.1s;">🌍 6+ Country Sizes</div>
+        <div class="float-chip" style="top:55%;left:3%;animation-delay:.35s;">⚡ Instant Download</div>
+
+        <!-- Inner floating card (only clickable area) -->
+        <div class="upload-inner-card">
+          <input type="file" id="fileInput" accept="image/*">
+          <!-- Animated camera icon -->
+          <div class="upload-icon-wrap">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M16 10l3-4h10l3 4h7a3 3 0 013 3v22a3 3 0 01-3 3H9a3 3 0 01-3-3V13a3 3 0 013-3h7z" stroke="#f0a500" stroke-width="2.5" stroke-linejoin="round"/>
+              <circle cx="24" cy="24" r="7" stroke="#f0a500" stroke-width="2.5"/>
+              <circle cx="24" cy="24" r="3" fill="#f0a500" opacity="0.5"/>
+            </svg>
+          </div>
+          <div class="upload-title" data-i18n="upload_title" style="font-size:clamp(16px, 2.6vw, 22px);margin-bottom:8px;">यहाँ Photo डालें</div>
+          <div class="upload-sub" style="color:var(--muted);font-size:clamp(11px, 1.5vw, 13px);line-height:1.8;">
+            <span data-i18n="upload_sub1">WhatsApp · Camera · Any image</span><br>
+            <span style="font-size:clamp(9px, 1.3vw, 11px);color:var(--muted2);">JPG · PNG · WEBP · BMP</span>
+          </div>
+          <!-- Feature pills inside card -->
+          <div class="upload-feats">
+            <span class="upload-feat-pill">🤖 AI BG Removal</span>
+            <span class="upload-feat-pill">✂️ Smart Crop</span>
+            <span class="upload-feat-pill">📄 300 DPI Print</span>
+            <span class="upload-feat-pill">🌍 6+ Sizes</span>
+            <span class="upload-feat-pill">⬇ Instant Save</span>
+          </div>
+          <!-- CTA hint -->
+          <div style="margin-top:18px;font-size:12px;color:var(--muted2);">
+            <span style="background:var(--accent);color:#000;border-radius:4px;padding:2px 8px;font-weight:700;font-size:11px;">CLICK</span>
+            &nbsp;<span data-i18n="or_drop">ya photo yahan drop karo</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Step 2: BG Preview + Comparison Slider -->
+    <div id="step2-canvas" class="hidden" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;position:relative;z-index:1;">
+      <!-- Plain canvas (before AI runs) -->
+      <canvas id="bgCanvas"></canvas>
+      <!-- Comparison Slider (shown after AI BG removal) -->
+      <div id="comparisonWrap" class="hidden">
+        <div class="comp-container" id="compContainer">
+          <!-- Result (bottom layer — bg removed) -->
+          <canvas id="compResultCanvas"></canvas>
+          <!-- Original clipped to left side -->
+          <div class="comp-clip" id="compClip">
+            <canvas id="compOrigCanvas"></canvas>
+          </div>
+          <!-- Divider -->
+          <div class="comp-divider" id="compDivider">
+            <div class="comp-handle">◀▶</div>
+          </div>
+          <!-- Labels -->
+          <div class="comp-label comp-label-left">Original</div>
+          <div class="comp-label comp-label-right">BG Removed ✨</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Crop -->
+    <div id="step3-canvas" class="hidden" style="position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;z-index:1;">
+      <canvas id="cropCanvas"></canvas>
+      <div class="canvas-hint" id="cropHint" data-i18n="crop_hint">Drag 🟡 box to reposition · Drag corners to resize</div>
+    </div>
+
+    <!-- Step 4: Sheet -->
+    <div id="step4-canvas" class="hidden" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;overflow:auto;padding:20px;position:relative;z-index:1;">
+      <canvas id="sheetCanvas"></canvas>
+    </div>
+
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+
+    <!-- ── SIDEBAR 1 ── -->
+    <div id="sb1">
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb1_standard">Photo Standard</div>
+        <div class="preset-grid">
+          <div class="preset-btn active" data-w="35" data-h="45" onclick="selectPreset(this)">🇮🇳 India<br><span class="preset-size">35×45 mm</span></div>
+          <div class="preset-btn" data-w="51" data-h="51" onclick="selectPreset(this)">🇺🇸 US Visa<br><span class="preset-size">51×51 mm</span></div>
+          <div class="preset-btn" data-w="35" data-h="45" onclick="selectPreset(this)">🇬🇧 UK<br><span class="preset-size">35×45 mm</span></div>
+          <div class="preset-btn" data-w="35" data-h="45" onclick="selectPreset(this)">🌍 Schengen<br><span class="preset-size">35×45 mm</span></div>
+          <div class="preset-btn" data-w="25" data-h="35" onclick="selectPreset(this)">🇦🇪 UAE<br><span class="preset-size">25×35 mm</span></div>
+          <div class="preset-btn" data-w="40" data-h="60" onclick="selectPreset(this)">🇦🇺 Australia<br><span class="preset-size">40×60 mm</span></div>
+        </div>
+        <div class="info-box">
+          <strong data-i18n="sb1_selected">Selected:</strong> <span id="presetLabel">35×45 mm (India Passport)</span><br>
+          <strong data-i18n="sb1_output">Output size:</strong> <span id="presetPx">413×531 px @ 300 DPI</span>
+        </div>
+      </div>
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb1_tips_title">Photo Tips</div>
+        <div class="tips">
+          <span data-i18n="tip1">📌 Achhi roshni mein photo lein</span>
+          <span data-i18n="tip2">📌 Plain background ho toh better</span>
+          <span data-i18n="tip3">📌 Chehra seedha aur clear ho</span>
+          <span data-i18n="tip4">📌 WhatsApp photos bilkul theek hain</span>
+          <span data-i18n="tip5">📌 Glasses hat dein agar ho sakein</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SIDEBAR 2 ── -->
+    <div id="sb2" class="hidden">
+
+      <!-- REMOVE BACKGROUND -->
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb2_remove_title">Remove Background</div>
+
+        <div id="bgProgressWrap" class="hidden">
+          <div class="status-text" id="statusText">Processing...</div>
+          <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+          <button class="btn btn-danger" id="cancelBgBtn" onclick="cancelBgRemoval()" style="margin-top:6px;" data-i18n="btn_cancel">✕ Cancel</button>
+        </div>
+
+        <button class="btn btn-primary" id="removeBgBtn" onclick="startBgRemoval()" data-i18n="btn_ai_remove">
+          🤖 Remove Background
+        </button>
+
+        <button class="btn btn-ghost mt6" id="skipBgBtn" onclick="skipBgRemoval()" data-i18n="btn_skip">Skip → Keep Original</button>
+        <button class="btn btn-primary mt6" id="proceedCropBtn" style="display:none;" onclick="proceedToCrop()" data-i18n="btn_proceed">✓ Proceed to Crop →</button>
+        <button class="btn btn-ghost mt6" onclick="goStep(1)" data-i18n="btn_new_photo">← New Photo</button>
+      </div>
+
+      <!-- BG COLOR -->
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb2_bg_color">Naya Background Color</div>
+        <div class="swatches" id="bgSwatches">
+          <div class="swatch active" style="background:#FFFFFF;border:1px solid #ddd;" data-color="#FFFFFF" onclick="selectBgColor(this)" title="White"></div>
+          <div class="swatch" style="background:#ACD1E9;" data-color="#ACD1E9" onclick="selectBgColor(this)" title="Passport Blue"></div>
+          <div class="swatch" style="background:#C8E6C9;" data-color="#C8E6C9" onclick="selectBgColor(this)" title="Light Green"></div>
+          <div class="swatch" style="background:#F5F5DC;" data-color="#F5F5DC" onclick="selectBgColor(this)" title="Cream"></div>
+          <div class="swatch" style="background:#E0E0E0;" data-color="#E0E0E0" onclick="selectBgColor(this)" title="Grey"></div>
+          <div class="swatch swatch-checker" data-color="transparent" onclick="selectBgColor(this)" title="Transparent"></div>
+          <label class="swatch swatch-custom" title="Custom">🎨<input type="color" id="customColor" oninput="applyCustomColor(this.value)"></label>
+        </div>
+        <div style="font-size:10px;color:var(--muted);" data-i18n="white_standard">⭐ White = India passport standard</div>
+      </div>
+    </div>
+
+    <!-- ── SIDEBAR 3 ── -->
+    <div id="sb3" class="hidden">
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb3_crop_title">Crop Controls</div>
+        <button class="btn btn-secondary" onclick="resetCrop()" data-i18n="btn_reset_crop">↺ Reset Crop Box</button>
+        <button class="btn btn-ghost mt6" onclick="autoCenterCrop()" data-i18n="btn_autocenter">⊙ Auto-Center</button>
+        <div class="info-box mt10">
+          <strong data-i18n="crop_amber_label">Amber box</strong> <span data-i18n="crop_drag_info">drag karein reposition ke liye.</span><br>
+          <strong data-i18n="crop_corners_label">Corners</strong> <span data-i18n="crop_resize_info">resize karte hain — aspect ratio auto-lock.</span>
+        </div>
+      </div>
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb3_adj_title">Photo Adjustments</div>
+        <div class="slider-row">
+          <span class="slider-label" data-i18n="adj_brightness">Brightness</span>
+          <input type="range" id="slBrightness" min="50" max="200" value="100" oninput="updateAdj(this,'vBrightness')">
+          <span class="slider-val" id="vBrightness">100</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label" data-i18n="adj_contrast">Contrast</span>
+          <input type="range" id="slContrast" min="50" max="200" value="100" oninput="updateAdj(this,'vContrast')">
+          <span class="slider-val" id="vContrast">100</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label" data-i18n="adj_saturation">Saturation</span>
+          <input type="range" id="slSaturation" min="0" max="200" value="100" oninput="updateAdj(this,'vSaturation')">
+          <span class="slider-val" id="vSaturation">100</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label" data-i18n="adj_warmth">Warmth</span>
+          <input type="range" id="slWarmth" min="-30" max="30" value="0" oninput="updateAdj(this,'vWarmth')">
+          <span class="slider-val" id="vWarmth">0</span>
+        </div>
+        <button class="btn btn-ghost mt6" onclick="resetAdj()" data-i18n="btn_reset_adj">Reset Adjustments</button>
+      </div>
+      <div class="sb-section">
+        <button class="btn btn-primary" onclick="confirmCrop()" data-i18n="btn_confirm_crop">✓ Confirm & Make Sheet →</button>
+        <button class="btn btn-ghost mt6" onclick="goStep(2)" data-i18n="btn_back">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── SIDEBAR 4 ── -->
+    <div id="sb4" class="hidden">
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb4_layout_title">Layout</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;" data-i18n="sb4_how_many">Kitni photos chahiye?</div>
+        <div class="count-row" style="flex-wrap:wrap;gap:5px;" id="totalBtns">
+          <div class="count-btn" data-v="1" onclick="setTotal(this)">1</div>
+          <div class="count-btn" data-v="2" onclick="setTotal(this)">2</div>
+          <div class="count-btn" data-v="3" onclick="setTotal(this)">3</div>
+          <div class="count-btn" data-v="4" onclick="setTotal(this)">4</div>
+          <div class="count-btn active" data-v="5" onclick="setTotal(this)">5</div>
+          <div class="count-btn" data-v="6" onclick="setTotal(this)">6</div>
+          <div class="count-btn" data-v="8" onclick="setTotal(this)">8</div>
+          <div class="count-btn" data-v="10" onclick="setTotal(this)">10</div>
+          <div class="count-btn" data-v="12" onclick="setTotal(this)">12</div>
+          <div class="count-btn" data-v="16" onclick="setTotal(this)">16</div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin:10px 0 6px;" data-i18n="sb4_per_row">Ek line mein kitni? (cols)</div>
+        <div class="count-row" id="colBtns">
+          <div class="count-btn" data-v="2" onclick="setCols(this)">2</div>
+          <div class="count-btn" data-v="3" onclick="setCols(this)">3</div>
+          <div class="count-btn" data-v="4" onclick="setCols(this)">4</div>
+          <div class="count-btn active" data-v="5" onclick="setCols(this)">5</div>
+        </div>
+        <div class="info-box mt6" id="layoutInfo" style="font-size:10px;">
+          <strong>5 photos</strong> — 5 cols × 1 row · Auto-fit ✓
+        </div>
+      </div>
+      <div class="sb-section">
+        <div class="sb-title" data-i18n="sb4_output_title">Output Info</div>
+        <div class="info-box">
+          <strong data-i18n="out_sheet">Sheet size:</strong> A4 (210×297 mm)<br>
+          <strong data-i18n="out_res">Resolution:</strong> 300 DPI (print-ready)<br>
+          <strong data-i18n="out_fmt">Format:</strong> PNG (lossless quality)<br>
+          <strong data-i18n="out_photos">Photos:</strong> <span id="photoCount">5 photos · 5×1 grid</span><br>
+          <strong data-i18n="out_cut">Cutting guides:</strong> <span data-i18n="out_included">Included ✓</span>
+        </div>
+      </div>
+      <div class="sb-section">
+        <button class="btn btn-primary" onclick="downloadSheet()" data-i18n="btn_download">⬇ Download PNG (300 DPI)</button>
+        <button class="btn btn-secondary mt6" onclick="printSheet()" data-i18n="btn_print">🖨 Print Directly</button>
+        <button class="btn btn-ghost mt6" onclick="goStep(3)" data-i18n="btn_back_crop">← Back to Crop & Adjust</button>
+        <button class="btn btn-ghost mt6" onclick="goStep(1)" data-i18n="btn_new_photo">← New Photo</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════ TUTORIAL PAGE ══════════ -->
+<div id="tutorialPage" class="hidden">
+  <div class="tut-header">
+    <button class="tut-back" onclick="closeTutorial()">← <span data-i18n="tut_back">Wapas Jao</span></button>
+    <div class="tut-title">API Key <em>Tutorial</em></div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+      <div style="font-size:10px;color:var(--muted);display:none;" class="tut-sub-text" data-i18n="tut_sub">Remove.bg se free API key kaise lein</div>
+      <div class="lang-toggle">
+        <button class="lang-btn" id="tut-lang-hi" onclick="setLang('hi')">HI</button>
+        <button class="lang-btn" id="tut-lang-en" onclick="setLang('en')">EN</button>
+      </div>
+    </div>
+  </div>
+  <div class="tut-body">
+
+    <!-- Progress dots -->
+    <div class="tut-steps-line">
+      <div class="tut-step-dot done">1</div>
+      <div class="tut-step-line done"></div>
+      <div class="tut-step-dot done">2</div>
+      <div class="tut-step-line done"></div>
+      <div class="tut-step-dot done">3</div>
+      <div class="tut-step-line done"></div>
+      <div class="tut-step-dot done">4</div>
+      <div class="tut-step-line done"></div>
+      <div class="tut-step-dot done">5</div>
+    </div>
+
+    <!-- STEP 1 -->
+    <div class="tut-card">
+      <div class="tut-card-left">
+        <div class="tut-step-badge">1</div>
+      </div>
+      <div class="tut-card-right">
+        <div class="tut-card-title" data-i18n="tut1_title">Remove.bg par free account banao</div>
+        <div class="tut-card-desc" data-i18n="tut1_desc">remove.bg ek AI tool hai jo photos se background automatically hatata hai. Iska free plan mein 50 photos har month milti hain — bilkul free.</div>
+        <div class="mock-screen">
+          <div class="mock-bar">
+            <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
+            <div class="mock-url">🔒 remove.bg</div>
+          </div>
+          <div class="mock-body" style="text-align:center;padding:24px;">
+            <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:#fff;margin-bottom:6px;">remove<span style="color:#00d4aa">.bg</span></div>
+            <div style="font-size:10px;color:#7070a0;margin-bottom:16px;">Remove Image Background — 100% Automatically and Free</div>
+            <div style="display:flex;gap:8px;justify-content:center;">
+              <div class="mock-btn mock-highlight">Sign Up Free →</div>
+              <div class="mock-btn outline">Log In</div>
+            </div>
+          </div>
+        </div>
+        <div class="tut-tip"><strong>🔗 Link:</strong> <span style="color:var(--accent)">remove.bg</span> — Google par search karo ya seedha URL daalo. Sign up mein sirf email chahiye, free hai.</div>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="tut-card">
+      <div class="tut-card-left">
+        <div class="tut-step-badge">2</div>
+      </div>
+      <div class="tut-card-right">
+        <div class="tut-card-title" data-i18n="tut2_title">Dashboard pe "API" tab pe click karo</div>
+        <div class="tut-card-desc" data-i18n="tut2_desc">Login hone ke baad upar navbar mein "API" likha hoga — us par click karo.</div>
+        <div class="mock-screen">
+          <div class="mock-bar">
+            <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
+            <div class="mock-url">🔒 remove.bg/dashboard</div>
+          </div>
+          <div class="mock-nav">
+            <div class="mock-nav-item">Uploads</div>
+            <div class="mock-nav-item">Bulk Editing</div>
+            <div class="mock-nav-item hi mock-highlight">API ← Click karo</div>
+            <div class="mock-nav-item">Plugins</div>
+            <div class="mock-nav-item">Pricing</div>
+          </div>
+          <div class="mock-body">
+            <div style="font-size:11px;color:#6060a0;">My Dashboard — Credits & Plan</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="tut-card">
+      <div class="tut-card-left">
+        <div class="tut-step-badge">3</div>
+      </div>
+      <div class="tut-card-right">
+        <div class="tut-card-title" data-i18n="tut3_title">"+ New API Key" button dabao</div>
+        <div class="tut-card-desc" data-i18n="tut3_desc">API page par right side mein "+ New API Key" ka button hoga. Us par click karo — ek popup khulega.</div>
+        <div class="mock-screen">
+          <div class="mock-bar">
+            <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
+            <div class="mock-url">🔒 remove.bg/dashboard#api-key</div>
+          </div>
+          <div class="mock-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="font-size:12px;color:#a0a0c0;font-weight:700;">API Keys</div>
+              <div class="mock-btn mock-highlight" style="font-size:10px;">+ New API Key ← Yahan</div>
+            </div>
+            <div style="margin-top:12px;background:#0f0f23;border-radius:6px;padding:10px;font-size:10px;color:#4040a0;">
+              No API keys yet. Create one above.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="tut-card">
+      <div class="tut-card-left">
+        <div class="tut-step-badge">4</div>
+      </div>
+      <div class="tut-card-right">
+        <div class="tut-card-title" data-i18n="tut4_title">Key copy karo</div>
+        <div class="tut-card-desc" data-i18n="tut4_desc">Popup mein ek long key dikhegi jaise: "abc123XYZ..." — us key ko poora select karke copy karo (Ctrl+C). Ye key sirf ek baar dikhti hai!</div>
+        <div class="mock-screen">
+          <div class="mock-bar">
+            <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
+            <div class="mock-url">🔒 remove.bg/dashboard#api-key</div>
+          </div>
+          <div class="mock-body">
+            <div style="background:#0a1230;border:1px solid #2a2a5a;border-radius:10px;padding:16px;">
+              <div style="font-size:13px;color:#fff;font-weight:700;margin-bottom:12px;">API Key</div>
+              <div style="font-size:10px;color:#7070a0;margin-bottom:6px;">API Key:</div>
+              <div class="mock-key-box mock-highlight">
+                <div class="mock-key-text">DeTzhisA7969mQu<wbr>ABN7XpXbY</div>
+                <div class="mock-copy-btn">📋 Copy</div>
+              </div>
+              <div style="font-size:9px;color:#f87171;margin-top:8px;">⚠ Ye key kisi ko share mat karo!</div>
+            </div>
+          </div>
+        </div>
+        <div class="tut-tip"><strong>⚠ Zaroori:</strong> Key copy ho gayi? Kahi note kar lo — notepad mein save karo. Baad mein bhi dekhni pad sakti hai.</div>
+      </div>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="tut-card">
+      <div class="tut-card-left">
+        <div class="tut-step-badge">5</div>
+      </div>
+      <div class="tut-card-right">
+        <div class="tut-card-title" data-i18n="tut5_title">Tool mein API key paste karo</div>
+        <div class="tut-card-desc" data-i18n="tut5_desc">Wapas PassportPrint Studio mein aao. Step 2 (Background Hatao) pe aoge toh upar API Key field dikhega — wahan Ctrl+V se paste karo. Key save ho jayegi automatically.</div>
+        <div class="mock-screen" style="background:#161616;border-color:#2c2c2c;">
+          <div class="mock-bar" style="background:#0d0d0d;border-color:#2c2c2c;">
+            <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
+            <div class="mock-url" style="background:#1e1e1e;color:#555;">PassportPrint Studio</div>
+          </div>
+          <div class="mock-body">
+            <div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">🔑 Remove.bg API Key</div>
+            <div class="mock-input-row">
+              <div class="mock-input mock-highlight" style="background:#1e1e1e;border-color:#f0a500;color:#4ade80;">DeTzhisA7969mQu... ← Paste karo</div>
+              <div style="background:#272727;border:1px solid #2c2c2c;border-radius:5px;padding:5px 8px;font-size:12px;cursor:pointer;">👁</div>
+            </div>
+            <div style="font-size:9px;color:#4ade80;margin-top:6px;">✓ API Key set hai — AI removal ready!</div>
+          </div>
+        </div>
+        <div class="tut-tip"><strong>✓ Ho gaya!</strong> Ab "🤖 AI Remove BG" button dabao — complex backgrounds bhi chutki mein hatenge. Har month 50 photos free milti hain, phir reset hoti hai.</div>
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div class="tut-cta">
+      <div class="tut-cta-title">Sab ho gaya! Ab <em>kaam shuru karo</em> 🎉</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:16px;" data-i18n="tut_cta_sub">Tool mein wapas jao, photo upload karo, aur AI magic dekho</div>
+      <button class="btn btn-primary" style="width:auto;padding:10px 28px;" onclick="closeTutorial()">← Tool pe Wapas Jao</button>
+    </div>
+
+  </div>
+</div>
+
+<script type="module">
+// ═══════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════
+let origImg = null;          // Original HTMLImageElement
+let transparentCanvas = null; // After BG removal (transparent PNG)
+let processedCanvas = null;  // With BG color applied
+let croppedCanvas = null;    // Final cropped + adjusted photo
+let bgColor = '#FFFFFF';
+let photoW = 35, photoH = 45; // mm
+let sheetCols = 5, sheetRows = 1, sheetTotal = 5;
+const DPI = 300, MM2IN = 25.4;
+
+// Crop state
+let cropX=0,cropY=0,cropW=0,cropH=0;
+let dispW=0,dispH=0,dispScale=1;
+let dragging=false,resizing=false,activeHandle=null;
+let dsx=0,dsy=0,dcx=0,dcy=0; // drag start
+const HS=11; // handle size
+
+// Adjustments
+let adjBrightness=100,adjContrast=100,adjSaturation=100,adjWarmth=0;
+
+// BG cancel flag
+let bgCancelled=false;
+
+// ═══════════════════════════════════════════════
+// GLOBALS
+// ═══════════════════════════════════════════════
+window.selectPreset=selectPreset;
+window.startBgRemoval=startBgRemoval;
+window.startOfflineBgRemoval=startOfflineBgRemoval;
+window.skipBgRemoval=skipBgRemoval;
+window.proceedToCrop=proceedToCrop;
+window.selectBgColor=selectBgColor;
+window.applyCustomColor=applyCustomColor;
+window.resetCrop=resetCrop;
+window.autoCenterCrop=autoCenterCrop;
+window.updateAdj=updateAdj;
+window.resetAdj=resetAdj;
+window.confirmCrop=confirmCrop;
+window.setCols=setCols;
+window.setRows=setRows;
+window.setTotal=setTotal;
+window.buildSheet=buildSheet;
+window.downloadSheet=downloadSheet;
+window.printSheet=printSheet;
+window.goStep=goStep;
+window.cancelBgRemoval=cancelBgRemoval;
+window.openTutorial=openTutorial;
+window.closeTutorial=closeTutorial;
+window.setLang=setLang;
+window.triggerFeatureLines=triggerFeatureLines;
+window.hideFeatLines=hideFeatLines;
+
+// ═══════════════════════════════════════════════
+// LANGUAGE SYSTEM
+// ═══════════════════════════════════════════════
+const LANG = {
+  hi: {
+    badge_free:'✓ 100% मुफ़्त', badge_offline:'✓ Offline', badge_ai:'✓ AI Background',
+    step1:'फ़ोटो अपलोड', step2:'Background हटाओ', step3:'Crop करो', step4:'A4 Sheet बनाओ',
+    upload_title:'यहाँ Photo डालें', upload_sub1:'WhatsApp downloads, camera photos, any image',
+    crop_hint:'🟡 box खींचो reposition के लिए · Corners से resize करो',
+    sb1_standard:'Photo Standard', sb1_selected:'चुना गया:', sb1_output:'Output size:',
+    sb1_tips_title:'Photo Tips',
+    tip1:'📌 अच्छी रोशनी में photo लें', tip2:'📌 Plain background हो तो better',
+    tip3:'📌 चेहरा सीधा और clear हो', tip4:'📌 WhatsApp photos बिलकुल ठीक हैं',
+    tip5:'📌 Glasses हटा दें अगर हो सके',
+    api_placeholder:'अपनी API key यहाँ डालो...',
+    api_status_empty:'Key डालो → AI background removal सब backgrounds पे काम करेगा',
+    api_privacy:'Key सिर्फ आपके computer पर save होती है।',
+    api_tut_btn:'API Key कैसे मिलेगी?', api_tut_sub:'Step-by-step tutorial देखें →',
+    sb2_remove_title:'Background हटाओ',
+    btn_cancel:'✕ Cancel', btn_ai_remove:'🤖 Background हटाओ',
+    btn_proceed:'✓ Crop करने जाओ →',
+    btn_skip:'Skip → Original रखना है',
+    sb2_bg_color:'नया Background Color', white_standard:'⭐ White = India passport standard',
+    sb3_crop_title:'Crop Controls', btn_reset_crop:'↺ Crop Box Reset करो',
+    btn_autocenter:'⊙ Auto-Center',
+    crop_amber_label:'Amber box', crop_drag_info:'खींचो reposition के लिए।',
+    crop_corners_label:'Corners', crop_resize_info:'resize करते हैं — aspect ratio auto-lock।',
+    sb3_adj_title:'Photo Adjustments',
+    adj_brightness:'Brightness', adj_contrast:'Contrast', adj_saturation:'Saturation', adj_warmth:'Warmth',
+    btn_reset_adj:'Adjustments Reset करो',
+    btn_confirm_crop:'✓ Confirm → Sheet बनाओ', btn_back:'← वापस',
+    sb4_layout_title:'Layout', sb4_how_many:'कितनी photos चाहिए?',
+    sb4_per_row:'एक line में कितनी? (cols)',
+    btn_regen:'↻ Sheet दोबारा बनाओ',
+    sb4_output_title:'Output Info',
+    out_sheet:'Sheet size:', out_res:'Resolution:', out_fmt:'Format:',
+    out_photos:'Photos:', out_cut:'Cutting guides:', out_included:'Included ✓',
+    btn_download:'⬇ Download PNG (300 DPI)', btn_print:'🖨 Print करो',
+    btn_new_photo:'← नई Photo', btn_back_crop:'← Crop पर वापस जाओ',
+    tut_back:'वापस जाओ', tut_sub:'Remove.bg से free API key कैसे लें',
+    tut1_title:'Remove.bg पर free account बनाओ',
+    tut1_desc:'remove.bg एक AI tool है जो photos से background automatically हटाता है। Free plan में 50 photos हर month मिलती हैं — बिलकुल free।',
+    tut2_title:'Dashboard पे "API" tab पे click करो',
+    tut2_desc:'Login होने के बाद ऊपर navbar में "API" लिखा होगा — उस पर click करो।',
+    tut3_title:'"+ New API Key" button दबाओ',
+    tut3_desc:'API page पर right side में "+ New API Key" का button होगा। उस पर click करो — एक popup खुलेगा।',
+    tut4_title:'Key copy करो',
+    tut4_desc:'Popup में एक long key दिखेगी जैसे: "abc123XYZ..." — उसे पूरा copy करो (Ctrl+C). यह key सिर्फ एक बार दिखती है!',
+    tut5_title:'Tool में API key paste करो',
+    tut5_desc:'वापस PassportPrint Studio में आओ। Step 2 पे API Key field में Ctrl+V से paste करो। Key automatically save हो जाएगी।',
+    tut_cta_sub:'Tool में वापस जाओ, photo upload करो, और AI magic देखो',
+    tut_cta_btn:'← Tool पे वापस जाओ',
+  },
+  en: {
+    badge_free:'✓ 100% Free', badge_offline:'✓ Offline After First Load', badge_ai:'✓ AI BG Removal',
+    step1:'Upload Photo', step2:'Remove Background', step3:'Crop & Adjust', step4:'Generate A4 Sheet',
+    upload_title:'Drop your photo here', upload_sub1:'WhatsApp downloads, camera photos, any image',
+    crop_hint:'Drag 🟡 box to reposition · Drag corners to resize',
+    sb1_standard:'Photo Standard', sb1_selected:'Selected:', sb1_output:'Output size:',
+    sb1_tips_title:'Photo Tips',
+    tip1:'📌 Take photo in good lighting', tip2:'📌 Plain background is better',
+    tip3:'📌 Face should be straight and clear', tip4:'📌 WhatsApp photos work perfectly',
+    tip5:'📌 Remove glasses if possible',
+    api_placeholder:'Paste your API key here...',
+    api_status_empty:'Enter key → AI removal will work on all backgrounds (indoor, outdoor, complex)',
+    api_privacy:'Key is saved only on your computer. Never sent anywhere.',
+    api_tut_btn:'How to get an API Key?', api_tut_sub:'View step-by-step tutorial →',
+    sb2_remove_title:'Remove Background',
+    btn_cancel:'✕ Cancel', btn_ai_remove:'🤖 Remove Background',
+    btn_proceed:'✓ Proceed to Crop →',
+    btn_skip:'Skip → Keep Original',
+    sb2_bg_color:'New Background Color', white_standard:'⭐ White = India passport standard',
+    sb3_crop_title:'Crop Controls', btn_reset_crop:'↺ Reset Crop Box',
+    btn_autocenter:'⊙ Auto-Center',
+    crop_amber_label:'Amber box', crop_drag_info:'drag to reposition.',
+    crop_corners_label:'Corners', crop_resize_info:'resize — aspect ratio auto-locked.',
+    sb3_adj_title:'Photo Adjustments',
+    adj_brightness:'Brightness', adj_contrast:'Contrast', adj_saturation:'Saturation', adj_warmth:'Warmth',
+    btn_reset_adj:'Reset Adjustments',
+    btn_confirm_crop:'✓ Confirm & Make Sheet →', btn_back:'← Back',
+    sb4_layout_title:'Layout', sb4_how_many:'How many photos?',
+    sb4_per_row:'Photos per row (cols)',
+    btn_regen:'↻ Regenerate Sheet',
+    sb4_output_title:'Output Info',
+    out_sheet:'Sheet size:', out_res:'Resolution:', out_fmt:'Format:',
+    out_photos:'Photos:', out_cut:'Cutting guides:', out_included:'Included ✓',
+    btn_download:'⬇ Download PNG (300 DPI)', btn_print:'🖨 Print Directly',
+    btn_new_photo:'← New Photo', btn_back_crop:'← Back to Crop & Adjust',
+    tut_back:'Go Back', tut_sub:'How to get a free API key from Remove.bg',
+    tut1_title:'Create a free account on Remove.bg',
+    tut1_desc:'remove.bg is an AI tool that automatically removes backgrounds from photos. The free plan gives 50 photos every month — completely free.',
+    tut2_title:'Click the "API" tab on the dashboard',
+    tut2_desc:'After logging in, you\'ll see "API" in the top navbar — click on it.',
+    tut3_title:'Click the "+ New API Key" button',
+    tut3_desc:'On the API page, you\'ll see a "+ New API Key" button on the right side. Click it — a popup will open.',
+    tut4_title:'Copy your API key',
+    tut4_desc:'A long key will appear like: "abc123XYZ..." — select it all and copy (Ctrl+C). This key is shown only once!',
+    tut5_title:'Paste the API key in the tool',
+    tut5_desc:'Come back to PassportPrint Studio. On Step 2, paste the key (Ctrl+V) in the API Key field. It saves automatically.',
+    tut_cta_sub:'Go back to the tool, upload a photo, and watch the AI magic',
+    tut_cta_btn:'← Go Back to Tool',
+  }
+};
+
+let currentLang='hi';
+
+function setLang(lang){
+  currentLang=lang;
+  // Update ALL lang buttons (main header + tutorial header)
+  document.querySelectorAll('.lang-btn').forEach(b=>{
+    b.classList.toggle('active', b.textContent.toLowerCase()===lang);
+  });
+  // Update all data-i18n text content
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const key=el.getAttribute('data-i18n');
+    if(LANG[lang]&&LANG[lang][key]) el.textContent=LANG[lang][key];
+  });
+  // Update input placeholders
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{
+    const key=el.getAttribute('data-i18n-placeholder');
+    if(LANG[lang]&&LANG[lang][key]) el.placeholder=LANG[lang][key];
+  });
+  // Update tutorial CTA button
+  const ctaBtn=document.querySelector('.tut-cta .btn-primary');
+  if(ctaBtn&&LANG[lang].tut_cta_btn) ctaBtn.textContent=LANG[lang].tut_cta_btn;
+  try{ localStorage.setItem('pps_lang',lang); }catch(e){}
+}
+
+function loadLang(){
+  try{
+    const saved=localStorage.getItem('pps_lang')||'hi';
+    setLang(saved);
+  }catch(e){ setLang('hi'); }
+}
+
+// ═══════════════════════════════════════════════
+// TUTORIAL
+// ═══════════════════════════════════════════════
+function openTutorial(){
+  document.getElementById('tutorialPage').classList.remove('hidden');
+  document.getElementById('tutorialPage').scrollTop=0;
+}
+function closeTutorial(){
+  document.getElementById('tutorialPage').classList.add('hidden');
+}
+
+// Load language on startup
+setTimeout(()=>{ loadLang(); }, 100);
+
+// ═══════════════════════════════════════════════
+// UPLOAD
+// ═══════════════════════════════════════════════
+const fileInput=document.getElementById('fileInput');
+const uploadZone=document.getElementById('uploadZone');
+fileInput.addEventListener('change',e=>{ if(e.target.files[0]) loadImage(e.target.files[0]); });
+uploadZone.addEventListener('dragover',e=>{ e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave',()=>uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop',e=>{ e.preventDefault(); uploadZone.classList.remove('drag-over'); if(e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]); });
+
+// Decode a file to an HTMLImageElement or ImageBitmap. Uses createImageBitmap
+// (async, off-main-thread) when available — keeps the UI responsive on heavy
+// multi-MB photos from WhatsApp / DSLR that would otherwise freeze the page.
+async function decodeImageFile(file){
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file);
+    } catch(_) { /* fall through to Image() path (e.g. HEIC) */ }
+  }
+  return await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image decode failed')); };
+    img.src = url;
+  });
+}
+
+// Downscale a huge source image to a sane working size. Passport photos never
+// need more than ~3000px on the long edge (AI model internally resizes to 2048,
+// final 300 DPI output for 40×60mm is 708px), so capping here prevents hangs
+// and 100+ MB canvas allocations on mobile without any visible quality loss.
+const WORKING_MAX = 3000;
+function normalizeOrigImage(src){
+  const sw = src.naturalWidth  || src.width;
+  const sh = src.naturalHeight || src.height;
+  const scale = Math.min(WORKING_MAX / sw, WORKING_MAX / sh, 1);
+  if (scale >= 1) return src; // small enough — use as-is
+  const dw = Math.round(sw * scale);
+  const dh = Math.round(sh * scale);
+  const c = document.createElement('canvas');
+  c.width = dw; c.height = dh;
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = 'high';
+  cx.drawImage(src, 0, 0, dw, dh);
+  // Free the decoded bitmap if possible
+  if (typeof src.close === 'function') { try { src.close(); } catch(_) {} }
+  return c;
+}
+
+async function loadImage(file){
+  try {
+    const decoded  = await decodeImageFile(file);
+    // Yield to the browser so the upload-zone click feedback can paint before
+    // the (potentially expensive) downscale step runs.
+    await new Promise(r => requestAnimationFrame(r));
+    origImg = normalizeOrigImage(decoded);
+    goStep(2);                              // make step2-canvas visible FIRST
+    requestAnimationFrame(()=>{
+      renderBgPreview(origImg);           // then read clientWidth correctly
+      requestAnimationFrame(()=>triggerFeatureLines()); // then draw lines after photo renders
+    });
+  } catch (err) {
+    console.error('[loadImage]', err);
+    alert('Image load nahi ho payi. Koi dusri photo try karein.');
+  }
+}
+
+// ═══════════════════════════════════════════════
+// STEP NAVIGATION
+// ═══════════════════════════════════════════════
+function goStep(n){
+  for(let i=1;i<=4;i++){
+    document.getElementById('tab'+i).className='step'+(i===n?' active':i<n?' done':'');
+    document.getElementById('sb'+i).classList.toggle('hidden',i!==n);
+    document.getElementById('step'+i+'-canvas').classList.toggle('hidden',i!==n);
+  }
+  const activeCanvas=document.getElementById('step'+n+'-canvas');
+  activeCanvas.style.display='flex';
+  // Fade-in animation
+  activeCanvas.classList.remove('step-fade');
+  void activeCanvas.offsetWidth; // force reflow
+  activeCanvas.classList.add('step-fade');
+  // Hide feature lines when leaving step 2
+  if(n!==2) hideFeatLines();
+}
+
+// ═══════════════════════════════════════════════
+// PRESET
+// ═══════════════════════════════════════════════
+function selectPreset(el){
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  photoW=+el.dataset.w; photoH=+el.dataset.h;
+  const pw=Math.round(photoW/MM2IN*DPI), ph=Math.round(photoH/MM2IN*DPI);
+  document.getElementById('presetLabel').textContent=`${photoW}×${photoH} mm`;
+  document.getElementById('presetPx').textContent=`${pw}×${ph} px @ 300 DPI`;
+}
+
+// ═══════════════════════════════════════════════
+// HI-DPI CANVAS HELPER
+// Sets a canvas's backing buffer to cssW × cssH × devicePixelRatio so that
+// preview canvases stay crisp on mobile / Retina displays (otherwise they
+// look blurry because the browser upscales a 1× buffer to a 2-3× screen).
+// Returns the draw dimensions — callers should keep drawing at (cssW × cssH).
+// ═══════════════════════════════════════════════
+function setupHiDPICanvas(cvs, cssW, cssH){
+  const dpr = Math.min(window.devicePixelRatio || 1, 3); // cap at 3× to avoid OOM on some phones
+  cvs.width  = Math.round(cssW * dpr);
+  cvs.height = Math.round(cssH * dpr);
+  cvs.style.width  = cssW + 'px';
+  cvs.style.height = cssH + 'px';
+  const ctx = cvs.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  return { ctx, dpr, cssW, cssH };
+}
+
+// ═══════════════════════════════════════════════
+// BG PREVIEW
+// ═══════════════════════════════════════════════
+function renderBgPreview(imgOrCanvas){
+  const cvs=document.getElementById('bgCanvas');
+  const wrap=document.getElementById('step2-canvas');
+  const mw=Math.max(wrap.clientWidth-40, 200);
+  const mh=Math.max(wrap.clientHeight-40, 200);
+  const sw=imgOrCanvas.naturalWidth||imgOrCanvas.width;
+  const sh=imgOrCanvas.naturalHeight||imgOrCanvas.height;
+  const scale=Math.min(mw/sw,mh/sh); // no ,1 cap — allow upscaling small images
+  const cssW=Math.round(sw*scale);
+  const cssH=Math.round(sh*scale);
+  const { ctx } = setupHiDPICanvas(cvs, cssW, cssH);
+  drawChecker(ctx,0,0,cssW,cssH);
+  ctx.drawImage(imgOrCanvas,0,0,cssW,cssH);
+}
+
+// ═══════════════════════════════════════════════
+// BACKGROUND REMOVAL
+// ═══════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════
+// AI BACKGROUND REMOVAL
+// Engine: Transformers.js + briaai/RMBG-1.4
+// Runs 100% in browser, no API key, no server
+// First use: ~44MB download (cached forever after)
+// ═══════════════════════════════════════════════
+let _aiModel     = null;   // ONNX model instance
+let _aiProcessor = null;   // Image preprocessor
+let _RawImage    = null;   // RawImage class
+let _aiLoading   = false;  // Loading lock
+
+// Load AI lib + model lazily (only on first click)
+async function ensureAiLoaded(onProgress) {
+  if (_aiModel && _aiProcessor) return; // Already cached — instant
+
+  if (_aiLoading) {
+    // Another tab/click is already loading — just wait
+    await new Promise(resolve => {
+      const check = setInterval(() => {
+        if (!_aiLoading) { clearInterval(check); resolve(); }
+      }, 400);
+    });
+    return;
+  }
+
+  _aiLoading = true;
+  try {
+    onProgress('Loading AI engine...', 3);
+
+    // Dynamic import — no script tag needed, works from file:// and https://
+    const tfModule = await import(
+      'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/dist/transformers.min.js'
+    );
+    const { AutoModel, AutoProcessor, env, RawImage } = tfModule;
+
+    env.allowLocalModels = false;
+    _RawImage = RawImage;
+
+    onProgress('Downloading AI model (first use only)...', 8);
+
+    // Load processor (config for 1024×1024 input normalization)
+    _aiProcessor = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
+      progress_callback: (e) => {
+        if (e.status === 'progress' && e.total) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          onProgress(`Downloading: ${pct}%`, Math.round(8 + pct * 0.12));
+        }
+      },
+      config: {
+        do_normalize:   true,
+        do_pad:         false,
+        do_rescale:     true,
+        do_resize:      true,
+        image_mean:     [0.5, 0.5, 0.5],
+        feature_extractor_type: 'ImageFeatureExtractor',
+        image_std:      [1, 1, 1],
+        resample:       2,
+        rescale_factor: 0.00392156862745098,
+        size:           { width: 1024, height: 1024 },
+      }
+    });
+
+    // Load quantized ONNX model (~44MB instead of 175MB)
+    _aiModel = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
+      device: 'wasm',
+      dtype: 'q8',   // quantized — 4× smaller, near-identical quality
+      progress_callback: (e) => {
+        if (e.status === 'progress' && e.total) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          const mb  = (e.loaded  / 1048576).toFixed(0);
+          const tot = (e.total   / 1048576).toFixed(0);
+          onProgress(`Downloading model: ${pct}% (${mb}/${tot} MB)`, Math.round(20 + pct * 0.74));
+        }
+        if (e.status === 'ready') {
+          onProgress('AI ready!', 96);
+        }
+      }
+    });
+
+    onProgress('AI loaded!', 97);
+  } catch (err) {
+    _aiLoading  = false;
+    _aiModel    = null;
+    _aiProcessor= null;
+    throw err;
+  }
+  _aiLoading = false;
+}
+
+// ── Connected-component cleanup: keeps only the largest foreground blob ──
+// Removes floating artifacts (objects above head, background remnants, etc.)
+function cleanMaskLargestComponent(maskData, w, h) {
+  const total = w * h;
+
+  // Build binary foreground array (threshold at 128)
+  const fg = new Uint8Array(total);
+  for (let i = 0; i < total; i++) fg[i] = maskData[i] > 128 ? 1 : 0;
+
+  // BFS to find all connected components
+  const label  = new Int32Array(total).fill(-1);
+  const sizes  = [];
+  const queue  = new Int32Array(total); // typed array queue — fast
+  let   numLbl = 0;
+
+  for (let seed = 0; seed < total; seed++) {
+    if (!fg[seed] || label[seed] !== -1) continue;
+
+    let head = 0, tail = 0, size = 0;
+    queue[tail++] = seed;
+    label[seed]   = numLbl;
+
+    while (head < tail) {
+      const idx = queue[head++];
+      size++;
+      const x = idx % w, y = (idx / w) | 0;
+      // 4-connected neighbors
+      if (x > 0   && fg[idx-1] && label[idx-1] < 0) { label[idx-1] = numLbl; queue[tail++] = idx-1; }
+      if (x < w-1 && fg[idx+1] && label[idx+1] < 0) { label[idx+1] = numLbl; queue[tail++] = idx+1; }
+      if (y > 0   && fg[idx-w] && label[idx-w] < 0) { label[idx-w] = numLbl; queue[tail++] = idx-w; }
+      if (y < h-1 && fg[idx+w] && label[idx+w] < 0) { label[idx+w] = numLbl; queue[tail++] = idx+w; }
+    }
+    sizes.push(size);
+    numLbl++;
+  }
+
+  if (numLbl === 0) return maskData; // nothing foreground at all
+
+  // Find the label with the largest area
+  let maxLbl = 0;
+  for (let i = 1; i < sizes.length; i++) {
+    if (sizes[i] > sizes[maxLbl]) maxLbl = i;
+  }
+
+  // Zero-out every pixel NOT belonging to the largest component
+  const cleaned = new Uint8Array(maskData);
+  for (let i = 0; i < total; i++) {
+    if (label[i] !== maxLbl) cleaned[i] = 0;
+  }
+  return cleaned;
+}
+
+// Main entry point — called by "Remove Background" button
+async function startBgRemoval() {
+  if (!origImg) { alert('Pehle photo upload karein!'); return; }
+
+  bgCancelled = false;
+  setBgBtnsDisabled(true);
+  hideFeatLines(); // hide feature overlay when processing starts
+  document.getElementById('bgProgressWrap').classList.remove('hidden');
+  document.getElementById('cancelBgBtn').style.display = 'flex';
+
+  // Hide comparison, show plain canvas while processing
+  document.getElementById('comparisonWrap').classList.add('hidden');
+  document.getElementById('bgCanvas').style.display = 'block';
+  document.getElementById('proceedCropBtn').style.display = 'none';
+
+  const statusEl  = document.getElementById('statusText');
+  const barEl     = document.getElementById('progressBar');
+
+  // Unified progress reporter
+  const onProgress = (msg, pct) => {
+    if (bgCancelled) return;
+    pct = Math.min(Math.max(pct, 0), 100);
+    statusEl.textContent     = msg;
+    barEl.style.width        = pct + '%';
+  };
+
+  try {
+    // ── Step 1: Load library + model (cached after first time) ──
+    await ensureAiLoaded(onProgress);
+    if (bgCancelled) return;
+
+    // ── Step 2: Prepare image (max 2048px for quality) ──
+    onProgress('Preparing image...', 97);
+    const src  = origImg;
+    const ow   = src.naturalWidth  || src.width;
+    const oh   = src.naturalHeight || src.height;
+    const MAX  = 2048;
+    const sc   = Math.min(MAX / ow, MAX / oh, 1);
+    const pw   = Math.round(ow * sc);
+    const ph   = Math.round(oh * sc);
+
+    const tmpCvs = document.createElement('canvas');
+    tmpCvs.width = pw; tmpCvs.height = ph;
+    tmpCvs.getContext('2d').drawImage(src, 0, 0, pw, ph);
+    const imageBlob = await new Promise(r => tmpCvs.toBlob(r, 'image/jpeg', 0.95));
+    if (bgCancelled) return;
+
+    // ── Step 3: Run model inference ──
+    onProgress('Analyzing background...', 98);
+    const image = await _RawImage.fromBlob(imageBlob);
+    const { pixel_values } = await _aiProcessor(image);
+    if (bgCancelled) return;
+
+    const { output } = await _aiModel({ input: pixel_values });
+    if (bgCancelled) return;
+
+    // ── Step 4: Apply alpha mask ──
+    onProgress('Removing background...', 99);
+    const mask = await _RawImage
+      .fromTensor(output[0].mul(255).to('uint8'))
+      .resize(pw, ph);
+    let maskData = mask.data;
+
+    // ── Step 4b: Clean up floating blobs (keep only the largest connected region) ──
+    maskData = cleanMaskLargestComponent(maskData, pw, ph);
+
+    const resultCvs = document.createElement('canvas');
+    resultCvs.width = pw; resultCvs.height = ph;
+    const rCtx = resultCvs.getContext('2d');
+    rCtx.drawImage(tmpCvs, 0, 0);
+    const imgData = rCtx.getImageData(0, 0, pw, ph);
+    for (let i = 0; i < maskData.length; i++) {
+      imgData.data[i * 4 + 3] = maskData[i];
+    }
+    rCtx.putImageData(imgData, 0, 0);
+    const resultBlob = await new Promise(r => resultCvs.toBlob(r, 'image/png'));
+    if (bgCancelled) return;
+
+    // ── Step 5: Build transparent + composite canvases ──
+    const resultUrl = URL.createObjectURL(resultBlob);
+    const resultImg = new Image();
+    resultImg.onload = () => {
+      if (bgCancelled) { URL.revokeObjectURL(resultUrl); return; }
+      URL.revokeObjectURL(resultUrl);
+
+      transparentCanvas = document.createElement('canvas');
+      transparentCanvas.width  = resultImg.width;
+      transparentCanvas.height = resultImg.height;
+      transparentCanvas.getContext('2d').drawImage(resultImg, 0, 0);
+
+      processedCanvas = compositeWithBg(transparentCanvas, bgColor);
+
+      onProgress('✅ Background removed successfully!', 100);
+
+      // Show before/after comparison slider
+      showComparisonSlider(origImg, processedCanvas);
+      document.getElementById('proceedCropBtn').style.display = 'flex';
+
+      setTimeout(() => {
+        if (!bgCancelled) {
+          document.getElementById('bgProgressWrap').classList.add('hidden');
+          barEl.style.width = '0%';
+          setBgBtnsDisabled(false);
+        }
+      }, 1200);
+    };
+    resultImg.onerror = () => {
+      throw new Error('Result image load fail hui');
+    };
+    resultImg.src = resultUrl;
+
+  } catch (err) {
+    if (bgCancelled) return;
+    console.error('[AI BG Removal Error]', err);
+    const msg = err.message || 'Unknown error';
+    statusEl.textContent = '⚠ Error: ' + msg;
+    setBgBtnsDisabled(false);
+    // Reset model so user can retry fresh
+    _aiModel     = null;
+    _aiProcessor = null;
+    _aiLoading   = false;
+  }
+}
+
+
+// ═══════════════════════════════════════════════
+// FEATURE LINES ANIMATION
+// Radiating SVG lines from the photo on step 2
+// ═══════════════════════════════════════════════
+function hideFeatLines(){
+  const svg=document.getElementById('featLinesSVG');
+  if(svg) svg.style.opacity='0';
+  document.querySelectorAll('.feat-chip').forEach(e=>{ e.style.opacity='0'; });
+  setTimeout(()=>{
+    document.getElementById('featLinesSVG')?.remove();
+    document.querySelectorAll('.feat-chip').forEach(e=>e.remove());
+  },300);
+}
+
+function triggerFeatureLines(){
+  const canvas=document.getElementById('bgCanvas');
+  const wrap=document.getElementById('step2-canvas');
+  if(!canvas||!wrap) return;
+
+  // Clean previous
+  document.getElementById('featLinesSVG')?.remove();
+  document.querySelectorAll('.feat-chip').forEach(e=>e.remove());
+
+  const cRect=canvas.getBoundingClientRect();
+  const wRect=wrap.getBoundingClientRect();
+  if(!wRect.width||!cRect.width) return;
+
+  const px=cRect.left-wRect.left; // photo left in wrap coords
+  const py=cRect.top-wRect.top;   // photo top in wrap coords
+  const pw=cRect.width;
+  const ph=cRect.height;
+  const W=wRect.width;
+  const H=wRect.height;
+
+  // 5 features: sx,sy = line start (on photo edge), tx,ty = line end (label center)
+  const feats=[
+    { sx:px+pw*0.12, sy:py,          tx:W*0.06,  ty:H*0.14, icon:'🤖', label:'AI BG Removal', color:'#f0a500', side:'left'  },
+    { sx:px+pw*0.88, sy:py,          tx:W*0.80,  ty:H*0.10, icon:'✂️', label:'Smart Crop',     color:'#60a5fa', side:'right' },
+    { sx:px+pw,      sy:py+ph*0.45,  tx:W*0.90,  ty:H*0.48, icon:'🌍', label:'6+ Sizes',       color:'#4ade80', side:'right' },
+    { sx:px+pw*0.72, sy:py+ph,       tx:W*0.74,  ty:H*0.88, icon:'📄', label:'300 DPI Print',  color:'#f0a500', side:'right' },
+    { sx:px,         sy:py+ph*0.60,  tx:W*0.04,  ty:H*0.75, icon:'⬇',  label:'Instant Save',  color:'#60a5fa', side:'left'  },
+  ];
+
+  // Build SVG
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg');
+  svg.id='featLinesSVG';
+  svg.setAttribute('width',W); svg.setAttribute('height',H);
+  Object.assign(svg.style,{position:'absolute',top:'0',left:'0',width:'100%',height:'100%',pointerEvents:'none',zIndex:'1',overflow:'visible',transition:'opacity .3s'});
+
+  feats.forEach((f,i)=>{
+    const delay=(i*0.13).toFixed(2);
+    const len=Math.hypot(f.tx-f.sx, f.ty-f.sy).toFixed(1);
+
+    // Glow halo at endpoint
+    const halo=document.createElementNS(NS,'circle');
+    halo.setAttribute('cx',f.tx); halo.setAttribute('cy',f.ty); halo.setAttribute('r','10');
+    halo.setAttribute('fill',f.color); halo.setAttribute('opacity','0');
+    halo.style.cssText=`animation:featDotPop .35s ${+delay+0.58}s ease both;transform-origin:${f.tx}px ${f.ty}px;`;
+
+    // Main line
+    const line=document.createElementNS(NS,'line');
+    line.setAttribute('x1',f.sx); line.setAttribute('y1',f.sy);
+    line.setAttribute('x2',f.tx); line.setAttribute('y2',f.ty);
+    line.setAttribute('stroke',f.color); line.setAttribute('stroke-width','1.5'); line.setAttribute('opacity','0.55');
+    line.style.cssText=`stroke-dasharray:${len};stroke-dashoffset:${len};animation:featLineDraw .65s ${delay}s cubic-bezier(.4,0,.2,1) forwards;`;
+
+    // Endpoint dot
+    const dot=document.createElementNS(NS,'circle');
+    dot.setAttribute('cx',f.tx); dot.setAttribute('cy',f.ty); dot.setAttribute('r','3.5');
+    dot.setAttribute('fill',f.color); dot.setAttribute('opacity','0');
+    dot.style.cssText=`animation:featDotPop .35s ${+delay+0.58}s ease both;transform-origin:${f.tx}px ${f.ty}px;`;
+
+    svg.appendChild(halo); svg.appendChild(line); svg.appendChild(dot);
+
+    // Label chip as HTML for better styling
+    const chip=document.createElement('div');
+    chip.className='feat-chip';
+    chip.innerHTML=`<span class="feat-icon">${f.icon}</span><span>${f.label}</span>`;
+
+    // Anchor position based on which side of screen
+    const anchorX = f.side==='left'  ? f.tx       // chip starts at dot, goes right
+                  : f.tx - 0;                      // chip ends at dot, goes left
+    const txStr   = f.side==='left'  ? '0%' : '-100%';
+
+    Object.assign(chip.style,{
+      left:`${f.tx}px`,
+      top:`${f.ty}px`,
+      transform:`translate(${txStr},-50%)`,
+      animation:`featChipIn .4s ${(+delay+0.65).toFixed(2)}s ease both`,
+    });
+    // Override --cx/--cy CSS vars for animation transform origin
+    chip.style.setProperty('--cx', txStr);
+    chip.style.setProperty('--cy','-50%');
+
+    wrap.appendChild(chip);
+  });
+
+  wrap.insertBefore(svg, wrap.firstChild);
+}
+
+// ═══════════════════════════════════════════════
+// COMPARISON SLIDER
+// ═══════════════════════════════════════════════
+function showComparisonSlider(origSrc, resultCanvas){
+  const wrap   = document.getElementById('step2-canvas');
+  const compW  = document.getElementById('comparisonWrap');
+  const container = document.getElementById('compContainer');
+  const origCvs   = document.getElementById('compOrigCanvas');
+  const resCvs    = document.getElementById('compResultCanvas');
+  const divider   = document.getElementById('compDivider');
+  const clip      = document.getElementById('compClip');
+
+  // Hide plain bgCanvas
+  document.getElementById('bgCanvas').style.display = 'none';
+
+  // Fit into container
+  const mw = Math.max(wrap.clientWidth  - 40, 300);
+  const mh = Math.max(wrap.clientHeight - 40, 300);
+  const sw = resultCanvas.width, sh = resultCanvas.height;
+  const scale = Math.min(mw/sw, mh/sh); // no ,1 — allow upscaling
+  const dw = Math.round(sw*scale), dh = Math.round(sh*scale);
+
+  // Set both canvases to same size, DPR-aware for crisp rendering on mobile
+  const { ctx: octx } = setupHiDPICanvas(origCvs, dw, dh);
+  const { ctx: rctx } = setupHiDPICanvas(resCvs,  dw, dh);
+
+  // Draw original (scaled) on origCvs
+  octx.drawImage(origSrc, 0, 0, dw, dh);
+
+  // Draw result (with BG) on resCvs
+  rctx.drawImage(resultCanvas, 0, 0, dw, dh);
+
+  // Size container
+  container.style.width  = dw + 'px';
+  container.style.height = dh + 'px';
+  clip.style.height = dh + 'px';
+
+  // Start divider at center
+  let sliderPct = 50;
+  setSlider(sliderPct, dw);
+
+  // Show comparison wrap
+  compW.classList.remove('hidden');
+
+  // ── Drag interaction ──
+  let dragging = false;
+
+  function setSlider(pct, w){
+    const x = Math.round((pct/100) * w);
+    divider.style.left = x + 'px';
+    clip.style.width   = x + 'px';
+    origCvs.style.width = dw + 'px'; // keep original canvas full width, clip handles masking
+  }
+
+  function onMove(clientX){
+    const rect = container.getBoundingClientRect();
+    const pct  = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+    sliderPct = pct;
+    setSlider(pct, dw);
+  }
+
+  container.addEventListener('mousedown',  e => { dragging = true; onMove(e.clientX); });
+  window.addEventListener('mousemove', e => { if(dragging) onMove(e.clientX); });
+  window.addEventListener('mouseup',   ()  => { dragging = false; });
+
+  container.addEventListener('touchstart', e => { dragging = true; onMove(e.touches[0].clientX); },{passive:true});
+  window.addEventListener('touchmove',  e => { if(dragging) onMove(e.touches[0].clientX); },{passive:true});
+  window.addEventListener('touchend',   ()  => { dragging = false; });
+}
+
+function hideComparisonSlider(){
+  document.getElementById('comparisonWrap').classList.add('hidden');
+  document.getElementById('bgCanvas').style.display = 'block';
+}
+
+
+
+function setBgBtnsDisabled(v){
+  ['removeBgBtn','skipBgBtn'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.disabled=v;
+  });
+}
+
+function cancelBgRemoval(){
+  bgCancelled=true;
+  document.getElementById('bgProgressWrap').classList.add('hidden');
+  document.getElementById('progressBar').style.width='0%';
+  setBgBtnsDisabled(false);
+}
+
+// Offline BG removal (plain backgrounds)
+function startOfflineBgRemoval(){
+  bgCancelled=false;
+  setBgBtnsDisabled(true);
+  document.getElementById('bgProgressWrap').classList.remove('hidden');
+  document.getElementById('cancelBgBtn').style.display='flex';
+  // Hide comparison, show plain canvas
+  hideComparisonSlider();
+  const statusEl=document.getElementById('statusText');
+  const barEl=document.getElementById('progressBar');
+  statusEl.textContent='Photo process ho rahi hai...';
+  barEl.style.width='20%';
+  setTimeout(()=>{
+    if(bgCancelled) return;
+    try{
+      const src=origImg;
+      const ow=src.naturalWidth||src.width, oh=src.naturalHeight||src.height;
+      const MAX=1800, sc=Math.min(MAX/ow,MAX/oh,1);
+      const pw=Math.round(ow*sc), ph=Math.round(oh*sc);
+      const tmp=document.createElement('canvas');
+      tmp.width=pw; tmp.height=ph;
+      tmp.getContext('2d').drawImage(src,0,0,pw,ph);
+      if(bgCancelled) return;
+      barEl.style.width='55%';
+      statusEl.textContent='Background detect ho raha hai...';
+      const threshold=parseInt(document.getElementById('bgThreshold').value)||45;
+      removeBgFloodFill(tmp,threshold);
+      if(bgCancelled) return;
+      barEl.style.width='90%';
+      transparentCanvas=document.createElement('canvas');
+      transparentCanvas.width=pw; transparentCanvas.height=ph;
+      transparentCanvas.getContext('2d').drawImage(tmp,0,0);
+      processedCanvas=compositeWithBg(transparentCanvas,bgColor);
+      barEl.style.width='100%';
+      statusEl.textContent='✓ Background hat gaya! (Offline)';
+      // Show comparison slider for offline too
+      showComparisonSlider(origImg, processedCanvas);
+      document.getElementById('proceedCropBtn').style.display='flex';
+      setTimeout(()=>{ if(!bgCancelled){
+        document.getElementById('bgProgressWrap').classList.add('hidden');
+        barEl.style.width='0%';
+        setBgBtnsDisabled(false);
+      }},800);
+    }catch(err){
+      if(!bgCancelled){ statusEl.textContent='⚠ Error: '+err.message; setBgBtnsDisabled(false); }
+    }
+  },60);
+}
+
+// ── Color-based flood fill BG removal (100% offline) ──
+function removeBgFloodFill(canvas, threshold){
+  const ctx=canvas.getContext('2d');
+  const w=canvas.width, h=canvas.height;
+  const id=ctx.getImageData(0,0,w,h);
+  const d=id.data;
+
+  // 1. Sample background color from all 4 edges
+  let rS=0,gS=0,bS=0,cnt=0;
+  const smp=(x,y)=>{const i=(y*w+x)*4;rS+=d[i];gS+=d[i+1];bS+=d[i+2];cnt++;};
+  for(let x=0;x<w;x++){smp(x,0);smp(x,h-1);}
+  for(let y=1;y<h-1;y++){smp(0,y);smp(w-1,y);}
+  const bgR=rS/cnt,bgG=gS/cnt,bgB=bS/cnt;
+
+  // 2. Flood fill from border pixels
+  // mask: 0=unvisited, 1=foreground(keep), 2=background(remove)
+  const mask=new Uint8Array(w*h);
+  const queue=new Int32Array(w*h); // stores flat index y*w+x
+  let head=0,tail=0;
+
+  const colorDist=(i)=>{
+    const dr=d[i]-bgR,dg=d[i+1]-bgG,db=d[i+2]-bgB;
+    return Math.sqrt(dr*dr+dg*dg+db*db);
+  };
+
+  const tryEnqueue=(x,y)=>{
+    if(x<0||x>=w||y<0||y>=h) return;
+    const idx=y*w+x;
+    if(mask[idx]!==0) return;
+    if(colorDist(idx*4)<threshold){ mask[idx]=2; queue[tail++]=idx; }
+    else { mask[idx]=1; }
+  };
+
+  // Seed all border pixels
+  for(let x=0;x<w;x++){ tryEnqueue(x,0); tryEnqueue(x,h-1); }
+  for(let y=1;y<h-1;y++){ tryEnqueue(0,y); tryEnqueue(w-1,y); }
+
+  // BFS expand
+  while(head<tail){
+    const idx=queue[head++];
+    const x=idx%w, y=Math.floor(idx/w);
+    tryEnqueue(x-1,y); tryEnqueue(x+1,y);
+    tryEnqueue(x,y-1); tryEnqueue(x,y+1);
+  }
+
+  // 3. Apply: background→transparent, keep foreground
+  const out=ctx.createImageData(w,h);
+  for(let i=0;i<d.length;i+=4){
+    out.data[i]=d[i]; out.data[i+1]=d[i+1]; out.data[i+2]=d[i+2];
+    out.data[i+3]=(mask[i>>2]===2)?0:d[i+3];
+  }
+  ctx.putImageData(out,0,0);
+}
+
+function skipBgRemoval(){
+  bgCancelled=false;
+  document.getElementById('bgProgressWrap').classList.add('hidden');
+  hideComparisonSlider();
+  const c=document.createElement('canvas');
+  const w=origImg.naturalWidth||origImg.width;
+  const h=origImg.naturalHeight||origImg.height;
+  c.width=w; c.height=h;
+  c.getContext('2d').drawImage(origImg,0,0);
+  transparentCanvas=c;
+  processedCanvas=compositeWithBg(c,bgColor);
+  goStep(3);
+  requestAnimationFrame(()=>initCropCanvas());
+}
+
+function proceedToCrop(){
+  if(!processedCanvas) return;
+  hideComparisonSlider();
+  goStep(3);
+  requestAnimationFrame(()=>initCropCanvas());
+}
+
+function compositeWithBg(src,color){
+  const c=document.createElement('canvas');
+  c.width=src.width; c.height=src.height;
+  const ctx=c.getContext('2d');
+  if(color&&color!=='transparent'){
+    ctx.fillStyle=color;
+    ctx.fillRect(0,0,c.width,c.height);
+  } else {
+    drawChecker(ctx,0,0,c.width,c.height);
+  }
+  ctx.drawImage(src,0,0);
+  return c;
+}
+
+function selectBgColor(el){
+  document.querySelectorAll('#bgSwatches .swatch').forEach(s=>s.classList.remove('active'));
+  el.classList.add('active');
+  bgColor=el.dataset.color;
+  rebuildProcessed();
+}
+
+function applyCustomColor(val){
+  bgColor=val;
+  document.querySelectorAll('#bgSwatches .swatch').forEach(s=>s.classList.remove('active'));
+  rebuildProcessed();
+}
+
+function rebuildProcessed(){
+  if(!transparentCanvas) return;
+  processedCanvas=compositeWithBg(transparentCanvas,bgColor);
+  // Refresh comparison slider if visible
+  const compW = document.getElementById('comparisonWrap');
+  if(!compW.classList.contains('hidden')){
+    showComparisonSlider(origImg, processedCanvas);
+  } else {
+    renderBgPreview(processedCanvas);
+  }
+  if(document.getElementById('cropCanvas').width>0) drawCrop();
+}
+
+// ═══════════════════════════════════════════════
+// CROP
+// ═══════════════════════════════════════════════
+const cropCvs=document.getElementById('cropCanvas');
+const cropCtx=cropCvs.getContext('2d');
+
+function initCropCanvas(){
+  const src=processedCanvas;
+  const wrap=document.getElementById('step3-canvas');
+  const mw=(wrap.clientWidth||720)-40;
+  const mh=(wrap.clientHeight||560)-60;
+  const scale=Math.min(mw/src.width,mh/src.height);
+  dispW=Math.round(src.width*scale);
+  dispH=Math.round(src.height*scale);
+  dispScale=scale;
+  // DPR-aware backing buffer — keeps cropCanvas sharp on mobile / Retina.
+  // Draw calls still use (dispW × dispH) logical coords because the context
+  // transform below maps them to the physical pixels.
+  setupHiDPICanvas(cropCvs, dispW, dispH);
+
+  // Default crop: center, passport aspect ratio
+  const aspect=photoW/photoH;
+  let ch=Math.min(dispH*0.88, dispW*0.88/aspect);
+  let cw=ch*aspect;
+  cropX=(dispW-cw)/2;
+  cropY=(dispH-ch)/2;
+  cropW=cw; cropH=ch;
+
+  setupCropEvents();
+  drawCrop();
+}
+
+function drawCrop(){
+  const src=processedCanvas;
+  cropCtx.clearRect(0,0,dispW,dispH);
+  drawChecker(cropCtx,0,0,dispW,dispH);
+  cropCtx.drawImage(src,0,0,dispW,dispH);
+
+  // Dim overlay
+  cropCtx.fillStyle='rgba(0,0,0,0.6)';
+  cropCtx.fillRect(0,0,dispW,dispH);
+
+  // Clear crop area & redraw image
+  cropCtx.save();
+  cropCtx.beginPath();
+  cropCtx.rect(cropX,cropY,cropW,cropH);
+  cropCtx.clip();
+  cropCtx.clearRect(cropX,cropY,cropW,cropH);
+
+  // Apply adjustments in crop preview
+  cropCtx.filter=getFilter();
+  cropCtx.drawImage(src,
+    cropX/dispScale, cropY/dispScale, cropW/dispScale, cropH/dispScale,
+    cropX, cropY, cropW, cropH
+  );
+  cropCtx.filter='none';
+  cropCtx.restore();
+
+  // Crop border
+  cropCtx.strokeStyle='#f0a500';
+  cropCtx.lineWidth=2;
+  cropCtx.strokeRect(cropX,cropY,cropW,cropH);
+
+  // Rule of thirds
+  cropCtx.strokeStyle='rgba(240,165,0,0.2)';
+  cropCtx.lineWidth=1;
+  [1/3,2/3].forEach(t=>{
+    cropCtx.beginPath();
+    cropCtx.moveTo(cropX+cropW*t,cropY); cropCtx.lineTo(cropX+cropW*t,cropY+cropH);
+    cropCtx.moveTo(cropX,cropY+cropH*t); cropCtx.lineTo(cropX+cropW,cropY+cropH*t);
+    cropCtx.stroke();
+  });
+
+  // Handles
+  getHandles().forEach(h=>{
+    cropCtx.fillStyle='#f0a500';
+    cropCtx.shadowColor='rgba(240,165,0,0.5)';
+    cropCtx.shadowBlur=6;
+    cropCtx.fillRect(h.x-HS/2,h.y-HS/2,HS,HS);
+  });
+  cropCtx.shadowBlur=0;
+
+  // Label
+  cropCtx.fillStyle='#f0a500';
+  cropCtx.font='bold 11px DM Mono, monospace';
+  cropCtx.fillText(`${photoW}×${photoH}mm`,cropX+3,cropY-5);
+}
+
+function getFilter(){
+  return `brightness(${adjBrightness}%) contrast(${adjContrast}%) saturate(${adjSaturation}%) sepia(${adjWarmth>0?adjWarmth:0}%) hue-rotate(${adjWarmth<0?adjWarmth:0}deg)`;
+}
+
+function getHandles(){
+  return [
+    {x:cropX,y:cropY,d:'nw'},{x:cropX+cropW/2,y:cropY,d:'n'},{x:cropX+cropW,y:cropY,d:'ne'},
+    {x:cropX,y:cropY+cropH/2,d:'w'},{x:cropX+cropW,y:cropY+cropH/2,d:'e'},
+    {x:cropX,y:cropY+cropH,d:'sw'},{x:cropX+cropW/2,y:cropY+cropH,d:'s'},{x:cropX+cropW,y:cropY+cropH,d:'se'},
+  ];
+}
+
+function hitHandle(mx,my){ return getHandles().find(h=>Math.abs(mx-h.x)<=HS&&Math.abs(my-h.y)<=HS)||null; }
+function inBox(mx,my){ return mx>cropX&&mx<cropX+cropW&&my>cropY&&my<cropY+cropH; }
+
+function setupCropEvents(){
+  cropCvs.onmousedown=e=>{
+    const {x,y}=pos(e);
+    const h=hitHandle(x,y);
+    if(h){ resizing=true; activeHandle=h; }
+    else if(inBox(x,y)){ dragging=true; dsx=x;dsy=y;dcx=cropX;dcy=cropY; }
+  };
+  cropCvs.onmousemove=e=>{
+    const {x,y}=pos(e);
+    const h=hitHandle(x,y);
+    const cursors={nw:'nw-resize',n:'n-resize',ne:'ne-resize',w:'w-resize',e:'e-resize',sw:'sw-resize',s:'s-resize',se:'se-resize'};
+    cropCvs.style.cursor=h?cursors[h.d]:inBox(x,y)?'move':'crosshair';
+    if(dragging){ cropX=clamp(dcx+(x-dsx),0,dispW-cropW); cropY=clamp(dcy+(y-dsy),0,dispH-cropH); drawCrop(); }
+    if(resizing&&activeHandle){ doResize(activeHandle.d,x,y); drawCrop(); }
+  };
+  cropCvs.onmouseup=cropCvs.onmouseleave=()=>{ dragging=false; resizing=false; activeHandle=null; };
+  // Touch
+  cropCvs.ontouchstart=e=>{ e.preventDefault(); const t=e.touches[0]; cropCvs.onmousedown({clientX:t.clientX,clientY:t.clientY,target:cropCvs}); };
+  cropCvs.ontouchmove=e=>{ e.preventDefault(); const t=e.touches[0]; cropCvs.onmousemove({clientX:t.clientX,clientY:t.clientY}); };
+  cropCvs.ontouchend=()=>cropCvs.onmouseup();
+}
+
+function pos(e){ const r=cropCvs.getBoundingClientRect(); return {x:(e.clientX-r.left)*(dispW/r.width),y:(e.clientY-r.top)*(dispH/r.height)}; }
+function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+
+function doResize(dir,mx,my){
+  const asp=photoW/photoH, min=30;
+  let nx=cropX,ny=cropY,nw=cropW,nh=cropH;
+  if(dir==='se'){ nw=Math.max(min,mx-nx); nh=nw/asp; }
+  else if(dir==='sw'){ nw=Math.max(min,(nx+cropW)-mx); nh=nw/asp; nx=(nx+cropW)-nw; ny=(ny+cropH)-nh; }
+  else if(dir==='ne'){ nw=Math.max(min,mx-nx); nh=nw/asp; ny=(ny+cropH)-nh; }
+  else if(dir==='nw'){ nw=Math.max(min,(nx+cropW)-mx); nh=nw/asp; nx=(nx+cropW)-nw; ny=(ny+cropH)-nh; }
+  else if(dir==='s'){ nh=Math.max(min,my-ny); nw=nh*asp; }
+  else if(dir==='n'){ nh=Math.max(min,(ny+cropH)-my); nw=nh*asp; ny=(ny+cropH)-nh; }
+  else if(dir==='e'){ nw=Math.max(min,mx-nx); nh=nw/asp; }
+  else if(dir==='w'){ nw=Math.max(min,(nx+cropW)-mx); nh=nw/asp; nx=(nx+cropW)-nw; }
+  // Clamp to canvas bounds
+  if(nx<0){nx=0;} if(ny<0){ny=0;}
+  if(nx+nw>dispW){nw=dispW-nx;nh=nw/asp;}
+  if(ny+nh>dispH){nh=dispH-ny;nw=nh*asp;}
+  cropX=nx; cropY=ny; cropW=nw; cropH=nh;
+}
+
+function resetCrop(){ initCropCanvas(); }
+function autoCenterCrop(){ cropX=(dispW-cropW)/2; cropY=(dispH-cropH)/2; drawCrop(); }
+
+// ═══════════════════════════════════════════════
+// ADJUSTMENTS
+// ═══════════════════════════════════════════════
+function updateAdj(input,valId){
+  const v=+input.value;
+  document.getElementById(valId).textContent=v;
+  const id=input.id;
+  if(id==='slBrightness') adjBrightness=v;
+  else if(id==='slContrast') adjContrast=v;
+  else if(id==='slSaturation') adjSaturation=v;
+  else if(id==='slWarmth') adjWarmth=v;
+  drawCrop();
+}
+function resetAdj(){
+  ['slBrightness','slContrast','slSaturation','slWarmth'].forEach(id=>{
+    document.getElementById(id).value=id==='slWarmth'?0:100;
+  });
+  adjBrightness=100;adjContrast=100;adjSaturation=100;adjWarmth=0;
+  ['vBrightness','vContrast','vSaturation'].forEach(id=>document.getElementById(id).textContent='100');
+  document.getElementById('vWarmth').textContent='0';
+  drawCrop();
+}
+
+// ═══════════════════════════════════════════════
+// CONFIRM CROP → EXTRACT PHOTO
+// ═══════════════════════════════════════════════
+function confirmCrop(){
+  const outW=Math.round(photoW/MM2IN*DPI);
+  const outH=Math.round(photoH/MM2IN*DPI);
+
+  const c=document.createElement('canvas');
+  c.width=outW; c.height=outH;
+  const ctx=c.getContext('2d');
+
+  // White background first
+  ctx.fillStyle=bgColor&&bgColor!=='transparent'?bgColor:'#FFFFFF';
+  ctx.fillRect(0,0,outW,outH);
+
+  // Draw with adjustments
+  ctx.filter=getFilter();
+  ctx.drawImage(processedCanvas,
+    cropX/dispScale, cropY/dispScale, cropW/dispScale, cropH/dispScale,
+    0, 0, outW, outH
+  );
+  ctx.filter='none';
+
+  croppedCanvas=c;
+  goStep(4);                              // make step4-canvas visible FIRST
+  requestAnimationFrame(()=>buildSheet()); // then buildSheet reads correct clientWidth
+}
+
+// ═══════════════════════════════════════════════
+// SHEET GENERATION
+// ═══════════════════════════════════════════════
+function setTotal(el){
+  document.querySelectorAll('#totalBtns .count-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  sheetTotal=+el.dataset.v;
+  buildSheet();
+}
+function setCols(el){
+  document.querySelectorAll('#colBtns .count-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  sheetCols=+el.dataset.v;
+  buildSheet();
+}
+// kept for backwards compat
+function setRows(el){
+  document.querySelectorAll('#rowBtns .count-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  sheetRows=+el.dataset.v;
+  buildSheet();
+}
+
+let _sheetFullRes=null;
+
+function buildSheet(){
+  if(!croppedCanvas) return;
+
+  const a4W=Math.round(210/MM2IN*DPI); // 2480px
+  const a4H=Math.round(297/MM2IN*DPI); // 3508px
+  const marginPx=Math.round(3/MM2IN*DPI);   // 3mm margin — bilkul upar
+  const gapMm=2.5, gapPx=Math.round(gapMm/MM2IN*DPI);
+
+  // Usable width inside margins
+  const usableW=a4W-2*marginPx;
+
+  // Natural photo size at 300dpi
+  const naturalPW=croppedCanvas.width;
+  const naturalPH=croppedCanvas.height;
+
+  // Auto-fit: scale photos so sheetCols fit in usable width
+  const scaledPW=Math.floor((usableW-(sheetCols-1)*gapPx)/sheetCols);
+  // Never scale UP beyond natural size
+  const pW=Math.min(scaledPW, naturalPW);
+  const pH=Math.round(pW*(naturalPH/naturalPW));
+
+  // How many rows needed
+  sheetRows=Math.ceil(sheetTotal/sheetCols);
+
+  const sheet=document.createElement('canvas');
+  sheet.width=a4W; sheet.height=a4H;
+  const ctx=sheet.getContext('2d');
+
+  ctx.fillStyle='#FFFFFF';
+  ctx.fillRect(0,0,a4W,a4H);
+
+  // CENTERED horizontally, TOP-aligned — equal margins left & right
+  const gridW=sheetCols*pW+(sheetCols-1)*gapPx;
+  const sx=Math.round((a4W-gridW)/2);   // CENTER — equal margin both sides
+  const sy=marginPx;                     // 3mm from TOP
+
+  // Draw photos (only sheetTotal count)
+  let count=0;
+  outer: for(let r=0;r<sheetRows;r++){
+    for(let c=0;c<sheetCols;c++){
+      if(count>=sheetTotal) break outer;
+      const x=sx+c*(pW+gapPx);
+      const y=sy+r*(pH+gapPx);
+      ctx.drawImage(croppedCanvas,0,0,naturalPW,naturalPH,x,y,pW,pH);
+      count++;
+    }
+  }
+
+  // ── STANDARD thin solid black border (cutting guide) ──
+  ctx.strokeStyle='rgba(0,0,0,0.75)';
+  ctx.lineWidth=Math.round(0.25/MM2IN*DPI); // ~0.25mm solid line
+  ctx.setLineDash([]); // SOLID — no dash
+  count=0;
+  outer2: for(let r=0;r<sheetRows;r++){
+    for(let c=0;c<sheetCols;c++){
+      if(count>=sheetTotal) break outer2;
+      const x=sx+c*(pW+gapPx);
+      const y=sy+r*(pH+gapPx);
+      ctx.strokeRect(x,y,pW,pH);
+      count++;
+    }
+  }
+
+  // Footer
+  ctx.fillStyle='rgba(0,0,0,0.15)';
+  ctx.font=`${Math.round(6/MM2IN*DPI)}px monospace`;
+  ctx.fillText(
+    `PassportPrint Studio · ${sheetTotal} photos · ${photoW}×${photoH}mm · 300 DPI · A4`,
+    marginPx, a4H-Math.round(4/MM2IN*DPI)
+  );
+
+  _sheetFullRes=sheet;
+
+  // Preview — DPR-aware so the A4 thumbnail stays crisp on mobile / Retina
+  const previewCvs=document.getElementById('sheetCanvas');
+  const wrap=document.getElementById('step4-canvas');
+  const mw=(wrap.clientWidth||720)-40;
+  const mh=(wrap.clientHeight||560)-40;
+  const scale=Math.min(mw/a4W,mh/a4H);
+  const cssW=Math.round(a4W*scale);
+  const cssH=Math.round(a4H*scale);
+  const { ctx: pctx } = setupHiDPICanvas(previewCvs, cssW, cssH);
+  pctx.drawImage(sheet,0,0,cssW,cssH);
+
+  // Info
+  const actualPwMm=(pW/DPI*MM2IN).toFixed(1);
+  const actualPhMm=(pH/DPI*MM2IN).toFixed(1);
+  document.getElementById('photoCount').textContent=
+    `${sheetTotal} photos · ${sheetCols}×${sheetRows} grid`;
+  const infoEl=document.getElementById('layoutInfo');
+  if(infoEl) infoEl.innerHTML=
+    `<strong>${sheetTotal} photos</strong> — ${sheetCols} cols × ${sheetRows} rows<br>
+     Photo size: ${actualPwMm}×${actualPhMm}mm · Auto-fit ✓`;
+}
+
+function downloadSheet(){
+  if(!_sheetFullRes) return;
+  const link=document.createElement('a');
+  link.download=`passport_photos_A4_${sheetCols}x${sheetRows}_300dpi.png`;
+  link.href=_sheetFullRes.toDataURL('image/png');
+  link.click();
+}
+
+function printSheet(){
+  if(!_sheetFullRes) return;
+  const dataUrl=_sheetFullRes.toDataURL('image/png');
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Print Passport Photos</title>
+  <style>@page{size:A4 portrait;margin:0;}body{margin:0;padding:0;}img{width:210mm;height:297mm;display:block;}</style>
+  </head><body onload="window.print();"><img src="${dataUrl}"></body></html>`);
+  w.document.close();
+}
+
+// ═══════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════
+function drawChecker(ctx,x,y,w,h){
+  const sz=10;
+  for(let i=x;i<x+w;i+=sz){
+    for(let j=y;j<y+h;j+=sz){
+      ctx.fillStyle=((Math.floor((i-x)/sz)+Math.floor((j-y)/sz))%2===0)?'#2a2a2a':'#1c1c1c';
+      ctx.fillRect(i,j,sz,sz);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════
+// UPLOAD BACKGROUND PARTICLE ANIMATION
+// ═══════════════════════════════════════════════
+function initUploadParticles(){
+  const cvs = document.getElementById('uploadBgCanvas');
+  if(!cvs) return;
+  const ctx = cvs.getContext('2d');
+  let W, H, particles=[];
+
+  function resize(){
+    W = cvs.offsetWidth; H = cvs.offsetHeight;
+    cvs.width = W; cvs.height = H;
+  }
+
+  function mkParticle(){
+    return {
+      x: Math.random()*W,
+      y: Math.random()*H,
+      r: Math.random()*1.6+0.4,
+      vx: (Math.random()-.5)*0.3,
+      vy: (Math.random()-.5)*0.3,
+      o: Math.random()*0.5+0.15,
+    };
+  }
+
+  function init(){
+    resize();
+    particles = Array.from({length:80}, mkParticle);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // Draw particles
+    particles.forEach(p=>{
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle=`rgba(240,165,0,${p.o})`;
+      ctx.fill();
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<0) p.x=W; if(p.x>W) p.x=0;
+      if(p.y<0) p.y=H; if(p.y>H) p.y=0;
+    });
+    // Draw connecting lines
+    for(let i=0;i<particles.length;i++){
+      for(let j=i+1;j<particles.length;j++){
+        const dx=particles[i].x-particles[j].x;
+        const dy=particles[i].y-particles[j].y;
+        const dist=Math.sqrt(dx*dx+dy*dy);
+        if(dist<120){
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x,particles[i].y);
+          ctx.lineTo(particles[j].x,particles[j].y);
+          ctx.strokeStyle=`rgba(240,165,0,${0.12*(1-dist/120)})`;
+          ctx.lineWidth=0.6;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+
+  init();
+  draw();
+  window.addEventListener('resize', ()=>{ resize(); particles=Array.from({length:80},mkParticle); });
+}
+initUploadParticles();
+
+// Add or_drop to LANG
+if(typeof LANG !== 'undefined'){
+  if(LANG.hi) LANG.hi.or_drop = 'ya photo yahan drop karo';
+  if(LANG.en) LANG.en.or_drop = 'or drop your photo here';
+}
+
+// Re-render on window resize so previews always fill the canvas correctly
+let _resizeTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(_resizeTimer);
+  _resizeTimer=setTimeout(()=>{
+    if(origImg && document.getElementById('step2-canvas').style.display!=='none'){
+      renderBgPreview(processedCanvas||origImg);
+    }
+    if(croppedCanvas && document.getElementById('step4-canvas').style.display!=='none'){
+      buildSheet();
+    }
+    if(processedCanvas && document.getElementById('step3-canvas').style.display!=='none'){
+      initCropCanvas();
+    }
+  },150);
+});
+</script>
+</body>
+</html>
