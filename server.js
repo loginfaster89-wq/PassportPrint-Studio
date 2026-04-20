@@ -11,6 +11,9 @@
 //   POST /api/verify-payment   (Bearer) { orderId, paymentId, signature, plan }
 //                                                               → { ok: true, user }
 //   GET  /api/plans            → { plans: [...] }
+//   GET  /api/download-status  (Bearer)                          → { plan, limit, used, remaining, unlimited, dayKey }
+//   POST /api/track-download   (Bearer)                          → { ok, plan, limit, used, remaining, unlimited, dayKey }
+//                                                               (429 when daily free limit is already reached)
 //   GET  /health               → { ok: true }
 // ════════════════════════════════════════════════════════════
 
@@ -36,6 +39,17 @@ const PLANS = {
   weekly:  { id: 'weekly',  name: 'Weekly',  amount: parseInt(process.env.PRICE_WEEKLY  || '4900',  10), days: 7  },
   monthly: { id: 'monthly', name: 'Monthly', amount: parseInt(process.env.PRICE_MONTHLY || '14900', 10), days: 30 },
 };
+
+// Per-plan daily download/print sheet limits. 0 = unlimited.
+const DAILY_LIMITS = {
+  free:    parseInt(process.env.FREE_DAILY_SHEETS    || '2', 10),
+  weekly:  parseInt(process.env.WEEKLY_DAILY_SHEETS  || '0', 10),
+  monthly: parseInt(process.env.MONTHLY_DAILY_SHEETS || '0', 10),
+};
+
+// Timezone used to decide when the "daily" counter resets.
+// Defaults to IST (UTC+5:30) since the app targets Indian users.
+const DAILY_RESET_TZ_OFFSET_MIN = parseInt(process.env.DAILY_RESET_TZ_OFFSET_MIN || '330', 10);
 
 if (JWT_SECRET === 'dev-only-secret-change-me') {
   console.warn('⚠️  JWT_SECRET is not set — using default. DO NOT use in production.');
@@ -72,6 +86,16 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
   CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(razorpay_order_id);
+
+  CREATE TABLE IF NOT EXISTS downloads_daily (
+    user_id    INTEGER NOT NULL,
+    day_key    TEXT    NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(user_id, day_key),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_downloads_user_day ON downloads_daily(user_id, day_key);
 `);
 
 // ── Razorpay SDK (may throw if keys missing, guard at use site) ──
@@ -130,6 +154,45 @@ function publicUser(u) {
   };
 }
 function validEmail(s) { return typeof s === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); }
+
+function effectivePlan(user) {
+  if (!user || !user.plan || user.plan === 'free') return 'free';
+  if (!user.plan_expires_at || user.plan_expires_at <= Date.now()) return 'free';
+  return user.plan;
+}
+
+// Returns a YYYY-MM-DD string in the configured reset timezone (default IST).
+function dayKeyFor(ts) {
+  const shifted = new Date(ts + DAILY_RESET_TZ_OFFSET_MIN * 60 * 1000);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getDownloadSnapshot(user) {
+  const plan      = effectivePlan(user);
+  const limit     = Number.isFinite(DAILY_LIMITS[plan]) ? DAILY_LIMITS[plan] : 0;
+  const unlimited = limit === 0;
+  const dayKey    = dayKeyFor(Date.now());
+  const row = db.prepare(
+    'SELECT count FROM downloads_daily WHERE user_id = ? AND day_key = ?'
+  ).get(user.id, dayKey);
+  const used      = row ? row.count : 0;
+  const remaining = unlimited ? Infinity : Math.max(0, limit - used);
+  return { plan, limit, used, remaining, unlimited, dayKey };
+}
+
+function serializeSnapshot(snap) {
+  return {
+    plan:      snap.plan,
+    limit:     snap.limit,
+    used:      snap.used,
+    remaining: snap.unlimited ? null : snap.remaining,
+    unlimited: snap.unlimited,
+    dayKey:    snap.dayKey,
+  };
+}
 
 // ── Routes ──
 app.get('/health', (req, res) => {
@@ -195,6 +258,48 @@ app.post('/api/login', authLimiter, async (req, res) => {
 
 app.get('/api/me', authRequired, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+app.get('/api/download-status', authRequired, (req, res) => {
+  try {
+    const snap = getDownloadSnapshot(req.user);
+    res.json(serializeSnapshot(snap));
+  } catch (e) {
+    console.error('download-status error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/track-download', authRequired, (req, res) => {
+  try {
+    const snap = getDownloadSnapshot(req.user);
+
+    if (snap.unlimited) {
+      return res.json({ ok: true, ...serializeSnapshot(snap) });
+    }
+
+    if (snap.used >= snap.limit) {
+      return res.status(429).json({
+        ok: false,
+        error: 'Daily free limit reached',
+        ...serializeSnapshot(snap),
+      });
+    }
+
+    const now = Date.now();
+    db.prepare(`
+      INSERT INTO downloads_daily (user_id, day_key, count, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(user_id, day_key)
+      DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
+    `).run(req.user.id, snap.dayKey, now);
+
+    const updated = getDownloadSnapshot(req.user);
+    res.json({ ok: true, ...serializeSnapshot(updated) });
+  } catch (e) {
+    console.error('track-download error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/api/create-order', authRequired, async (req, res) => {
