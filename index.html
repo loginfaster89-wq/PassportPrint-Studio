@@ -1512,7 +1512,14 @@ setTimeout(()=>{ loadLang(); }, 100);
 // ═══════════════════════════════════════════════
 const fileInput=document.getElementById('fileInput');
 const uploadZone=document.getElementById('uploadZone');
-fileInput.addEventListener('change',e=>{ if(e.target.files[0]) loadImage(e.target.files[0]); });
+fileInput.addEventListener('change',e=>{
+  const f=e.target.files[0];
+  if(!f) return;
+  // Clear value so selecting the SAME file again (e.g. after pressing "New Photo")
+  // still fires a change event.
+  fileInput.value='';
+  loadImage(f);
+});
 uploadZone.addEventListener('dragover',e=>{ e.preventDefault(); uploadZone.classList.add('drag-over'); });
 uploadZone.addEventListener('dragleave',()=>uploadZone.classList.remove('drag-over'));
 uploadZone.addEventListener('drop',e=>{ e.preventDefault(); uploadZone.classList.remove('drag-over'); if(e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]); });
