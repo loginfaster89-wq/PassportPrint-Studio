@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════
 // PassportPrint Studio — Backend API
-// Node.js + Express + SQLite + Razorpay + JWT + bcrypt
+// Node.js + Express + libSQL (Turso / local SQLite) + Razorpay + JWT + bcrypt
 // ════════════════════════════════════════════════════════════
 // Endpoints:
 //   POST /api/signup                 { name, email, password }        → { token, user }
@@ -26,7 +26,8 @@ const cors          = require('cors');
 const crypto        = require('crypto');
 const bcrypt        = require('bcryptjs');
 const jwt           = require('jsonwebtoken');
-const Database      = require('better-sqlite3');
+const { createClient } = require('@libsql/client');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const Razorpay      = require('razorpay');
 const rateLimit     = require('express-rate-limit');
 const nodemailer    = require('nodemailer');
@@ -38,6 +39,12 @@ const RAZORPAY_KEY_ID     = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 const DB_PATH             = process.env.DB_PATH || './pps.db';
 const CORS_ORIGINS        = (process.env.CORS_ORIGINS || '*').split(',').map(s => s.trim());
+
+// libSQL / Turso connection. If TURSO_DATABASE_URL is set we use the hosted
+// libSQL DB (recommended for production — survives container restarts).
+// Otherwise we fall back to a local SQLite file at DB_PATH (good for dev).
+const LIBSQL_URL        = process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || ('file:' + DB_PATH);
+const LIBSQL_AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN   || process.env.LIBSQL_AUTH_TOKEN || '';
 
 const PLANS = {
   weekly:  { id: 'weekly',  name: 'Weekly',  amount: parseInt(process.env.PRICE_WEEKLY  || '4900',  10), days: 7  },
@@ -87,63 +94,126 @@ if (SMTP_USER && SMTP_PASS) {
   console.warn('⚠️  SMTP not configured — OTP email verification will fail until SMTP_USER and SMTP_PASS are set.');
 }
 
-// ── DB ──
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    email           TEXT UNIQUE NOT NULL,
-    name            TEXT NOT NULL,
-    password_hash   TEXT NOT NULL,
-    plan            TEXT NOT NULL DEFAULT 'free',
-    plan_expires_at INTEGER NOT NULL DEFAULT 0,
-    created_at      INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS payments (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id         INTEGER NOT NULL,
-    razorpay_order_id    TEXT NOT NULL,
-    razorpay_payment_id  TEXT,
-    razorpay_signature   TEXT,
-    plan            TEXT NOT NULL,
-    amount          INTEGER NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'created',
-    created_at      INTEGER NOT NULL,
-    verified_at     INTEGER,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
-  CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(razorpay_order_id);
+// ── DB (libSQL, async) ──
+// Thin wrapper that mimics the better-sqlite3 API (`prepare().get/run/all`,
+// `exec`, `pragma`, `transaction`) but is async on top of @libsql/client.
+// Every call site therefore `await`s the result. Transactions pin the
+// underlying tx object via AsyncLocalStorage so `db.prepare(...).run(...)`
+// inside a `db.transaction(fn)` callback automatically participates.
+const _client = createClient({
+  url: LIBSQL_URL,
+  ...(LIBSQL_AUTH_TOKEN ? { authToken: LIBSQL_AUTH_TOKEN } : {}),
+});
+const _txStore = new AsyncLocalStorage();
+function _runner() { return _txStore.getStore() || _client; }
+function _materialize(row) {
+  if (!row || typeof row !== 'object') return row;
+  const o = {};
+  for (const k of Object.keys(row)) {
+    const v = row[k];
+    o[k] = typeof v === 'bigint' ? Number(v) : v;
+  }
+  return o;
+}
+const db = {
+  prepare(sql) {
+    return {
+      async get(...args) {
+        const r = await _runner().execute({ sql, args });
+        return r.rows[0] ? _materialize(r.rows[0]) : undefined;
+      },
+      async run(...args) {
+        const r = await _runner().execute({ sql, args });
+        return {
+          lastInsertRowid: r.lastInsertRowid == null ? 0 : Number(r.lastInsertRowid),
+          changes: r.rowsAffected || 0,
+        };
+      },
+      async all(...args) {
+        const r = await _runner().execute({ sql, args });
+        return r.rows.map(_materialize);
+      },
+    };
+  },
+  async exec(sqlBlock) {
+    await _client.executeMultiple(sqlBlock);
+  },
+  async pragma(stmt) {
+    // Remote libSQL ignores most pragmas; swallow failures so startup still works.
+    try { await _client.execute(`PRAGMA ${stmt}`); } catch (e) { /* no-op on remote */ }
+  },
+  transaction(fn) {
+    return async (...args) => {
+      const tx = await _client.transaction('write');
+      try {
+        const result = await _txStore.run(tx, () => fn(...args));
+        await tx.commit();
+        return result;
+      } catch (e) {
+        try { await tx.rollback(); } catch (_) {}
+        throw e;
+      }
+    };
+  },
+};
 
-  CREATE TABLE IF NOT EXISTS downloads_daily (
-    user_id    INTEGER NOT NULL,
-    day_key    TEXT    NOT NULL,
-    count      INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY(user_id, day_key),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_downloads_user_day ON downloads_daily(user_id, day_key);
+async function initDb() {
+  await db.pragma('journal_mode = WAL');
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      email           TEXT UNIQUE NOT NULL,
+      name            TEXT NOT NULL,
+      password_hash   TEXT NOT NULL,
+      plan            TEXT NOT NULL DEFAULT 'free',
+      plan_expires_at INTEGER NOT NULL DEFAULT 0,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS payments (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id         INTEGER NOT NULL,
+      razorpay_order_id    TEXT NOT NULL,
+      razorpay_payment_id  TEXT,
+      razorpay_signature   TEXT,
+      plan            TEXT NOT NULL,
+      amount          INTEGER NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'created',
+      created_at      INTEGER NOT NULL,
+      verified_at     INTEGER,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(razorpay_order_id);
 
-  CREATE TABLE IF NOT EXISTS pending_signups (
-    email          TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    password_hash  TEXT NOT NULL,
-    otp_hash       TEXT NOT NULL,
-    attempts       INTEGER NOT NULL DEFAULT 0,
-    expires_at     INTEGER NOT NULL,
-    created_at     INTEGER NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS downloads_daily (
+      user_id    INTEGER NOT NULL,
+      day_key    TEXT    NOT NULL,
+      count      INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(user_id, day_key),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_downloads_user_day ON downloads_daily(user_id, day_key);
 
-  CREATE TABLE IF NOT EXISTS password_resets (
-    email          TEXT PRIMARY KEY,
-    otp_hash       TEXT NOT NULL,
-    attempts       INTEGER NOT NULL DEFAULT 0,
-    expires_at     INTEGER NOT NULL,
-    created_at     INTEGER NOT NULL
-  );
-`);
+    CREATE TABLE IF NOT EXISTS pending_signups (
+      email          TEXT PRIMARY KEY,
+      name           TEXT NOT NULL,
+      password_hash  TEXT NOT NULL,
+      otp_hash       TEXT NOT NULL,
+      attempts       INTEGER NOT NULL DEFAULT 0,
+      expires_at     INTEGER NOT NULL,
+      created_at     INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS password_resets (
+      email          TEXT PRIMARY KEY,
+      otp_hash       TEXT NOT NULL,
+      attempts       INTEGER NOT NULL DEFAULT 0,
+      expires_at     INTEGER NOT NULL,
+      created_at     INTEGER NOT NULL
+    );
+  `);
+}
 
 // ── Razorpay SDK (may throw if keys missing, guard at use site) ──
 let razorpay = null;
@@ -174,18 +244,24 @@ app.use('/api/', apiLimiter);
 function signToken(userId) {
   return jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '30d' });
 }
-function authRequired(req, res, next) {
+async function authRequired(req, res, next) {
   const h = req.headers.authorization || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: 'Missing Authorization header' });
+  let payload;
   try {
-    const payload = jwt.verify(m[1], JWT_SECRET);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
+    payload = jwt.verify(m[1], JWT_SECRET);
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  try {
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
     if (!user) return res.status(401).json({ error: 'User not found' });
     req.user = user;
     next();
   } catch (e) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    console.error('authRequired db error:', e);
+    return res.status(500).json({ error: 'Server error' });
   }
 }
 function publicUser(u) {
@@ -264,12 +340,12 @@ function dayKeyFor(ts) {
   return `${y}-${m}-${d}`;
 }
 
-function getDownloadSnapshot(user) {
+async function getDownloadSnapshot(user) {
   const plan      = effectivePlan(user);
   const limit     = Number.isFinite(DAILY_LIMITS[plan]) ? DAILY_LIMITS[plan] : 0;
   const unlimited = limit === 0;
   const dayKey    = dayKeyFor(Date.now());
-  const row = db.prepare(
+  const row = await db.prepare(
     'SELECT count FROM downloads_daily WHERE user_id = ? AND day_key = ?'
   ).get(user.id, dayKey);
   const used      = row ? row.count : 0;
@@ -325,7 +401,7 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     }
 
     const lower = email.trim().toLowerCase();
-    const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
+    const exists = await db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
     if (exists) return res.status(409).json({ error: 'This Gmail is already registered. Please login instead.' });
 
     const otp = genOtp();
@@ -335,7 +411,7 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     ]);
     const now = Date.now();
     const expiresAt = now + OTP_TTL_MS;
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO pending_signups (email, name, password_hash, otp_hash, attempts, expires_at, created_at)
       VALUES (?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
@@ -352,7 +428,7 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     } catch (ex) {
       console.error('SMTP send failed:', ex && ex.message);
       // Roll back pending signup so the user can retry cleanly.
-      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       return res.status(502).json({
         error: 'We could not deliver a verification email to that Gmail address. Please check it and try again.',
       });
@@ -376,38 +452,38 @@ app.post('/api/verify-signup-otp', authLimiter, async (req, res) => {
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the 6-digit code we emailed you.' });
 
     const lower = email.trim().toLowerCase();
-    const pending = db.prepare('SELECT * FROM pending_signups WHERE email = ?').get(lower);
+    const pending = await db.prepare('SELECT * FROM pending_signups WHERE email = ?').get(lower);
     if (!pending) return res.status(400).json({ error: 'No pending verification. Please sign up again.' });
 
     if (pending.expires_at < Date.now()) {
-      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       return res.status(400).json({ error: 'This code has expired. Please sign up again.' });
     }
     if (pending.attempts >= 5) {
-      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       return res.status(429).json({ error: 'Too many wrong attempts. Please sign up again.' });
     }
 
     const match = await bcrypt.compare(code, pending.otp_hash);
     if (!match) {
-      db.prepare('UPDATE pending_signups SET attempts = attempts + 1 WHERE email = ?').run(lower);
+      await db.prepare('UPDATE pending_signups SET attempts = attempts + 1 WHERE email = ?').run(lower);
       return res.status(400).json({ error: 'Wrong code. Please try again.' });
     }
 
     // Defensive: make sure the user didn't get created in parallel.
-    const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
+    const existing = await db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
     if (existing) {
-      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       const token = signToken(existing.id);
       return res.json({ token, user: publicUser(existing) });
     }
 
-    const info = db.prepare(
+    const info = await db.prepare(
       'INSERT INTO users (email, name, password_hash, plan, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(lower, pending.name, pending.password_hash, 'free', 0, Date.now());
-    db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
+    await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
 
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
     const token = signToken(user.id);
     res.json({ token, user: publicUser(user) });
   } catch (e) {
@@ -435,7 +511,7 @@ app.post('/api/login', authLimiter, async (req, res) => {
     if (!password) return res.status(400).json({ error: 'Please enter your password.' });
 
     const lower = email.trim().toLowerCase();
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
+    const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
     if (!user) return res.status(404).json({ error: 'No account found with this Gmail. Please sign up first.' });
 
     const ok = await bcrypt.compare(password, user.password_hash);
@@ -469,7 +545,7 @@ app.post('/api/send-password-reset-otp', authLimiter, async (req, res) => {
     }
 
     const lower = email.trim().toLowerCase();
-    const user = db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
+    const user = await db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
     // For privacy, do not reveal whether the account exists. Pretend we sent
     // a code either way — but we only actually send/store it when the user
     // exists so attackers cannot enumerate Gmail addresses.
@@ -485,7 +561,7 @@ app.post('/api/send-password-reset-otp', authLimiter, async (req, res) => {
     const otpHash = await bcrypt.hash(otp, 8);
     const now = Date.now();
     const expiresAt = now + OTP_TTL_MS;
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO password_resets (email, otp_hash, attempts, expires_at, created_at)
       VALUES (?, ?, 0, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
@@ -499,7 +575,7 @@ app.post('/api/send-password-reset-otp', authLimiter, async (req, res) => {
       await sendPasswordResetEmail(lower, otp);
     } catch (ex) {
       console.error('SMTP send (reset) failed:', ex && ex.message);
-      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
       return res.status(502).json({
         error: 'We could not deliver the reset email. Please try again in a moment.',
       });
@@ -526,38 +602,37 @@ app.post('/api/reset-password', authLimiter, async (req, res) => {
     }
 
     const lower = email.trim().toLowerCase();
-    const pending = db.prepare('SELECT * FROM password_resets WHERE email = ?').get(lower);
+    const pending = await db.prepare('SELECT * FROM password_resets WHERE email = ?').get(lower);
     if (!pending) return res.status(400).json({ error: 'No pending reset. Please request a new code.' });
 
     if (pending.expires_at < Date.now()) {
-      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
       return res.status(400).json({ error: 'This code has expired. Please request a new one.' });
     }
     if (pending.attempts >= 5) {
-      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
       return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
     }
 
     const match = await bcrypt.compare(code, pending.otp_hash);
     if (!match) {
-      db.prepare('UPDATE password_resets SET attempts = attempts + 1 WHERE email = ?').run(lower);
+      await db.prepare('UPDATE password_resets SET attempts = attempts + 1 WHERE email = ?').run(lower);
       return res.status(400).json({ error: 'Wrong code. Please try again.' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
+    const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
     if (!user) {
-      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      await db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
       return res.status(404).json({ error: 'Account not found.' });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 11);
-    const tx = db.transaction(() => {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, user.id);
-      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
-    });
-    tx();
+    await db.transaction(async () => {
+      await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, user.id);
+      await db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+    })();
 
-    const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    const fresh = await db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     const token = signToken(fresh.id);
     res.json({ token, user: publicUser(fresh) });
   } catch (e) {
@@ -568,17 +643,16 @@ app.post('/api/reset-password', authLimiter, async (req, res) => {
 
 // Permanently delete the authenticated user's account and all associated data.
 // After this succeeds the same Gmail address can be used to sign up again.
-app.post('/api/delete-account', authRequired, (req, res) => {
+app.post('/api/delete-account', authRequired, async (req, res) => {
   try {
     const uid = req.user.id;
     const email = req.user.email;
-    const tx = db.transaction(() => {
-      db.prepare('DELETE FROM downloads_daily WHERE user_id = ?').run(uid);
-      db.prepare('DELETE FROM payments WHERE user_id = ?').run(uid);
-      db.prepare('DELETE FROM pending_signups WHERE email = ?').run(email);
-      db.prepare('DELETE FROM users WHERE id = ?').run(uid);
-    });
-    tx();
+    await db.transaction(async () => {
+      await db.prepare('DELETE FROM downloads_daily WHERE user_id = ?').run(uid);
+      await db.prepare('DELETE FROM payments WHERE user_id = ?').run(uid);
+      await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(email);
+      await db.prepare('DELETE FROM users WHERE id = ?').run(uid);
+    })();
     res.json({ ok: true });
   } catch (e) {
     console.error('delete-account error:', e);
@@ -586,9 +660,9 @@ app.post('/api/delete-account', authRequired, (req, res) => {
   }
 });
 
-app.get('/api/download-status', authRequired, (req, res) => {
+app.get('/api/download-status', authRequired, async (req, res) => {
   try {
-    const snap = getDownloadSnapshot(req.user);
+    const snap = await getDownloadSnapshot(req.user);
     res.json(serializeSnapshot(snap));
   } catch (e) {
     console.error('download-status error:', e);
@@ -596,9 +670,9 @@ app.get('/api/download-status', authRequired, (req, res) => {
   }
 });
 
-app.post('/api/track-download', authRequired, (req, res) => {
+app.post('/api/track-download', authRequired, async (req, res) => {
   try {
-    const snap = getDownloadSnapshot(req.user);
+    const snap = await getDownloadSnapshot(req.user);
 
     if (snap.unlimited) {
       return res.json({ ok: true, ...serializeSnapshot(snap) });
@@ -613,14 +687,14 @@ app.post('/api/track-download', authRequired, (req, res) => {
     }
 
     const now = Date.now();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO downloads_daily (user_id, day_key, count, updated_at)
       VALUES (?, ?, 1, ?)
       ON CONFLICT(user_id, day_key)
       DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
     `).run(req.user.id, snap.dayKey, now);
 
-    const updated = getDownloadSnapshot(req.user);
+    const updated = await getDownloadSnapshot(req.user);
     res.json({ ok: true, ...serializeSnapshot(updated) });
   } catch (e) {
     console.error('track-download error:', e);
@@ -643,7 +717,7 @@ app.post('/api/create-order', authRequired, async (req, res) => {
       notes: { userId: String(req.user.id), plan: p.id },
     });
 
-    db.prepare(
+    await db.prepare(
       'INSERT INTO payments (user_id, razorpay_order_id, plan, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(req.user.id, order.id, p.id, p.amount, 'created', Date.now());
 
@@ -661,7 +735,7 @@ app.post('/api/create-order', authRequired, async (req, res) => {
   }
 });
 
-app.post('/api/verify-payment', authRequired, (req, res) => {
+app.post('/api/verify-payment', authRequired, async (req, res) => {
   try {
     const { orderId, paymentId, signature, plan } = req.body || {};
     if (!orderId || !paymentId || !signature || !PLANS[plan]) {
@@ -675,13 +749,13 @@ app.post('/api/verify-payment', authRequired, (req, res) => {
       .digest('hex');
 
     if (expected !== signature) {
-      db.prepare('UPDATE payments SET status = ?, razorpay_payment_id = ?, razorpay_signature = ? WHERE razorpay_order_id = ? AND user_id = ?')
+      await db.prepare('UPDATE payments SET status = ?, razorpay_payment_id = ?, razorpay_signature = ? WHERE razorpay_order_id = ? AND user_id = ?')
         .run('invalid_signature', paymentId, signature, orderId, req.user.id);
       return res.status(400).json({ error: 'Invalid signature — payment rejected' });
     }
 
     // Confirm the order belongs to this user and is in 'created' state
-    const payment = db.prepare(
+    const payment = await db.prepare(
       'SELECT * FROM payments WHERE razorpay_order_id = ? AND user_id = ?'
     ).get(orderId, req.user.id);
     if (!payment) return res.status(404).json({ error: 'Order not found' });
@@ -691,18 +765,17 @@ app.post('/api/verify-payment', authRequired, (req, res) => {
     const p = PLANS[plan];
     const expires = now + p.days * 24 * 3600 * 1000;
 
-    const tx = db.transaction(() => {
-      db.prepare(
+    await db.transaction(async () => {
+      await db.prepare(
         'UPDATE payments SET status = ?, razorpay_payment_id = ?, razorpay_signature = ?, verified_at = ? WHERE id = ?'
       ).run('paid', paymentId, signature, now, payment.id);
 
-      db.prepare(
+      await db.prepare(
         'UPDATE users SET plan = ?, plan_expires_at = ? WHERE id = ?'
       ).run(plan, expires, req.user.id);
-    });
-    tx();
+    })();
 
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
     res.json({ ok: true, user: publicUser(user) });
   } catch (e) {
     console.error('verify-payment error:', e);
@@ -717,9 +790,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`✓ PassportPrint backend listening on port ${PORT}`);
-  console.log(`  Razorpay: ${razorpay ? 'configured' : 'NOT configured'}`);
-  console.log(`  DB:       ${DB_PATH}`);
-  console.log(`  CORS:     ${CORS_ORIGINS.join(', ')}`);
-});
+(async () => {
+  try {
+    await initDb();
+    app.listen(PORT, () => {
+      const host = (LIBSQL_URL.startsWith('file:') ? LIBSQL_URL : (LIBSQL_URL.split('//')[1] || LIBSQL_URL).split('.')[0]);
+      console.log(`✓ PassportPrint backend listening on port ${PORT}`);
+      console.log(`  Razorpay: ${razorpay ? 'configured' : 'NOT configured'}`);
+      console.log(`  DB:       ${host}`);
+      console.log(`  CORS:     ${CORS_ORIGINS.join(', ')}`);
+    });
+  } catch (e) {
+    console.error('Fatal: failed to initialize DB:', e);
+    process.exit(1);
+  }
+})();
