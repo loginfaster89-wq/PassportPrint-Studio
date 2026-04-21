@@ -5,6 +5,7 @@
 // Endpoints:
 //   POST /api/signup                 { name, email, password }        → { token, user }
 //   POST /api/login                  { email, password }              → { token, user }
+//   POST /api/google-login           { credential }                    → { token, user }
 //   GET  /api/me                     (Bearer token)                    → { user }
 //   POST /api/delete-account         (Bearer token)                    → { ok: true }
 //   POST /api/send-password-reset-otp { email }                        → { otpSent, email, expiresInSec }
@@ -100,6 +101,17 @@ if (JWT_SECRET === 'dev-only-secret-change-me') {
 if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
   console.warn('⚠️  Razorpay keys missing — payment endpoints will fail until configured.');
 }
+
+// ── Google Sign-In ─────────────────────────────────────────────────────────
+// Web OAuth Client ID from Google Cloud Console. Required by /api/google-login
+// so the frontend's One Tap flow works. A comma-separated list is accepted in
+// case the same backend serves multiple frontends with different Client IDs.
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+if (!GOOGLE_CLIENT_IDS.length) {
+  console.warn('⚠️  GOOGLE_CLIENT_ID is not set — /api/google-login will reject all requests.');
+}
+const fetchFn = (typeof fetch === 'function') ? fetch : require('node-fetch');
 
 // ── SMTP / OTP ──
 const SMTP_HOST   = process.env.SMTP_HOST   || 'smtp.gmail.com';
@@ -566,6 +578,84 @@ app.post('/api/login', authLimiter, async (req, res) => {
     res.json({ token, user: publicUser(user) });
   } catch (e) {
     console.error('login error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Google Sign-In ─────────────────────────────────────────────────────────
+// Accepts a Google Identity Services ID token (JWT credential from One Tap or
+// the "Sign in with Google" button), verifies it against Google's tokeninfo
+// endpoint, and either creates a new user (first login) or returns an
+// existing one. The user is logged in immediately — no password prompt, no
+// OTP email. Only official @gmail.com addresses with email_verified=true are
+// accepted, matching the rest of the auth system.
+async function verifyGoogleIdToken(credential) {
+  if (!credential || typeof credential !== 'string') {
+    throw new Error('Missing Google credential');
+  }
+  if (!GOOGLE_CLIENT_IDS.length) {
+    throw new Error('Google Sign-In is not configured on the server');
+  }
+  // tokeninfo validates signature, expiry, issuer and returns the claims.
+  const resp = await fetchFn('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential));
+  if (!resp.ok) {
+    throw new Error('Invalid Google credential');
+  }
+  const claims = await resp.json();
+  if (claims.error || claims.error_description) {
+    throw new Error('Invalid Google credential');
+  }
+  if (!GOOGLE_CLIENT_IDS.includes(claims.aud)) {
+    throw new Error('Google credential was issued for a different app');
+  }
+  if (claims.iss !== 'https://accounts.google.com' && claims.iss !== 'accounts.google.com') {
+    throw new Error('Invalid Google issuer');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (claims.exp && Number(claims.exp) < now) {
+    throw new Error('Google credential expired');
+  }
+  if (String(claims.email_verified).toLowerCase() !== 'true') {
+    throw new Error('Google account email is not verified');
+  }
+  return {
+    email: String(claims.email || '').trim().toLowerCase(),
+    name: String(claims.name || claims.given_name || '').trim() || 'Google user',
+    sub: String(claims.sub || ''),
+  };
+}
+
+app.post('/api/google-login', authLimiter, async (req, res) => {
+  try {
+    const { credential } = req.body || {};
+    let profile;
+    try {
+      profile = await verifyGoogleIdToken(credential);
+    } catch (e) {
+      return res.status(401).json({ error: e.message || 'Google sign-in failed' });
+    }
+    if (!validGmail(profile.email)) {
+      return res.status(400).json({ error: 'Only @gmail.com addresses are accepted. Please use your Gmail account.' });
+    }
+
+    const existing = await db.prepare('SELECT * FROM users WHERE email = ?').get(profile.email);
+    if (existing) {
+      const token = signToken(existing.id);
+      return res.json({ token, user: publicUser(existing) });
+    }
+
+    // First-time sign-in: create the user. password_hash is a non-matchable
+    // placeholder — password login is disabled for Google-only accounts until
+    // the user goes through the password-reset flow.
+    const placeholderHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+    const info = await db.prepare(
+      'INSERT INTO users (email, name, password_hash, plan, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(profile.email, profile.name, placeholderHash, 'free', 0, Date.now());
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    const token = signToken(user.id);
+    res.json({ token, user: publicUser(user) });
+  } catch (e) {
+    console.error('google-login error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
