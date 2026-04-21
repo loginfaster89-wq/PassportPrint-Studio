@@ -58,6 +58,24 @@ const DAILY_LIMITS = {
   monthly: parseInt(process.env.MONTHLY_DAILY_SHEETS || '0', 10),
 };
 
+// Comma-separated list of admin emails. Anyone who signs in with one of
+// these addresses is treated as if they have an always-active 'monthly'
+// plan (unlimited downloads, all paid features unlocked) without needing
+// to pay. Lookups are case-insensitive and whitespace-trimmed.
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean)
+);
+function isAdminEmail(email) {
+  return typeof email === 'string' && ADMIN_EMAILS.has(email.trim().toLowerCase());
+}
+// Far-future expiry (year 9999) so the admin plan never appears to lapse
+// on the client. The server never trusts this value for real plan logic
+// because isAdminEmail() is re-checked on every request.
+const ADMIN_PLAN_EXPIRES_AT = 253402300799000;
+
 // Timezone used to decide when the "daily" counter resets.
 // Defaults to IST (UTC+5:30) since the app targets Indian users.
 const DAILY_RESET_TZ_OFFSET_MIN = parseInt(process.env.DAILY_RESET_TZ_OFFSET_MIN || '330', 10);
@@ -266,6 +284,16 @@ async function authRequired(req, res, next) {
 }
 function publicUser(u) {
   if (!u) return null;
+  if (isAdminEmail(u.email)) {
+    return {
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      plan: 'monthly',
+      planExpiresAt: ADMIN_PLAN_EXPIRES_AT,
+      createdAt: u.created_at,
+    };
+  }
   const active = u.plan !== 'free' && u.plan_expires_at > Date.now();
   return {
     id: u.id,
@@ -326,7 +354,9 @@ async function sendPasswordResetEmail(to, otp) {
 }
 
 function effectivePlan(user) {
-  if (!user || !user.plan || user.plan === 'free') return 'free';
+  if (!user) return 'free';
+  if (isAdminEmail(user.email)) return 'monthly';
+  if (!user.plan || user.plan === 'free') return 'free';
   if (!user.plan_expires_at || user.plan_expires_at <= Date.now()) return 'free';
   return user.plan;
 }
