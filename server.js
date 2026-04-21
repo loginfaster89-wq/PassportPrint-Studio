@@ -93,7 +93,7 @@ const SMTP_PORT   = parseInt(process.env.SMTP_PORT || '465', 10);
 const SMTP_SECURE = (process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
 const SMTP_USER   = process.env.SMTP_USER   || '';
 const SMTP_PASS   = process.env.SMTP_PASS   || '';
-const SMTP_FROM   = process.env.SMTP_FROM   || (SMTP_USER ? `PassportPrint Studio <${SMTP_USER}>` : '');
+const SMTP_FROM   = process.env.SMTP_FROM   || (SMTP_USER ? `Studio Print <${SMTP_USER}>` : '');
 const OTP_TTL_MS  = Math.max(60, parseInt(process.env.OTP_TTL_SEC || '600', 10)) * 1000;
 
 let mailer = null;
@@ -322,8 +322,8 @@ function otpEmailBody(otp, purpose) {
     ? 'Use the code below to reset your password.'
     : 'Use the code below to verify your email address.';
   const subject = purpose === 'reset'
-    ? `Your PassportPrint Studio password reset code: ${otp}`
-    : `Your PassportPrint Studio verification code: ${otp}`;
+    ? `Your Studio Print password reset code: ${otp}`
+    : `Your Studio Print verification code: ${otp}`;
   const text =
 `${intro}
 
@@ -333,7 +333,7 @@ This code expires in ${minutes} minutes.
 If you did not request this, please ignore this email.`;
   const html = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#0d0d16;color:#e7e7f0;border-radius:12px;">
-  <h2 style="margin:0 0 12px;color:#fff;font-weight:700;">PassportPrint <em style="color:#7cc4ff;font-style:normal;">Studio</em></h2>
+  <h2 style="margin:0 0 12px;color:#fff;font-weight:700;">Studio <em style="color:#7cc4ff;font-style:normal;">Print</em></h2>
   <p style="margin:0 0 16px;color:#bfbfd0;">${intro}</p>
   <div style="font-family:ui-monospace,Menlo,monospace;font-size:32px;letter-spacing:8px;font-weight:700;background:#1a1a26;border:1px solid #2a2a38;border-radius:10px;padding:16px 20px;text-align:center;color:#fff;">${otp}</div>
   <p style="margin:16px 0 0;color:#8c8ca0;font-size:12px;">This code expires in ${minutes} minutes. If you did not request it, you can ignore this email.</p>
