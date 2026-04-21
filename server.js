@@ -18,7 +18,7 @@
 //   GET  /api/download-status  (Bearer)                          → { plan, limit, used, remaining, unlimited, dayKey }
 //   POST /api/track-download   (Bearer)                          → { ok, plan, limit, used, remaining, unlimited, dayKey }
 //                                                               (429 when daily free limit is already reached)
-//   GET  /health               → { ok: true }
+//   GET  /health               → { ok, razorpayConfigured, googleSignInConfigured, smtpConfigured }
 // ════════════════════════════════════════════════════════════
 
 require('dotenv').config();
@@ -423,7 +423,12 @@ function serializeSnapshot(snap) {
 
 // ── Routes ──
 app.get('/health', (req, res) => {
-  res.json({ ok: true, razorpayConfigured: !!razorpay });
+  res.json({
+    ok: true,
+    razorpayConfigured: !!razorpay,
+    googleSignInConfigured: GOOGLE_CLIENT_IDS.length > 0,
+    smtpConfigured: !!mailer,
+  });
 });
 
 app.get('/api/plans', (req, res) => {
