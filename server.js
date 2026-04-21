@@ -39,6 +39,20 @@ const RAZORPAY_KEY_ID     = process.env.RAZORPAY_KEY_ID || '';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 const DB_PATH             = process.env.DB_PATH || './pps.db';
 const CORS_ORIGINS        = (process.env.CORS_ORIGINS || '*').split(',').map(s => s.trim());
+// Always-allowed origin patterns for this project's known frontends.
+// These are permitted regardless of CORS_ORIGINS so that a misconfigured
+// env var can never lock the production site or its Netlify deploy
+// previews out of the API. Extend this list if new official frontends
+// (e.g. a custom domain) are added.
+const ALWAYS_ALLOWED_ORIGIN_PATTERNS = [
+  /^https:\/\/studioprint\.netlify\.app$/,              // production Netlify site
+  /^https:\/\/[a-z0-9-]+--studioprint\.netlify\.app$/,  // Netlify deploy previews / branch deploys
+  /^https:\/\/loginfaster89-wq\.github\.io$/,           // legacy GitHub Pages site
+];
+function isAlwaysAllowedOrigin(origin) {
+  return typeof origin === 'string' &&
+    ALWAYS_ALLOWED_ORIGIN_PATTERNS.some(re => re.test(origin));
+}
 
 // libSQL / Turso connection. If TURSO_DATABASE_URL is set we use the hosted
 // libSQL DB (recommended for production — survives container restarts).
@@ -248,6 +262,7 @@ app.use(cors({
     if (!origin) return cb(null, true);              // allow curl / server-to-server
     if (CORS_ORIGINS.includes('*')) return cb(null, true);
     if (CORS_ORIGINS.includes(origin)) return cb(null, true);
+    if (isAlwaysAllowedOrigin(origin)) return cb(null, true);
     return cb(new Error('CORS blocked: ' + origin));
   },
   credentials: false,
