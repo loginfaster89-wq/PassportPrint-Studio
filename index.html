@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PassportPrint Studio — Free Passport Photo Tool</title>
+<title>Studio Print — Free Passport Photo Tool</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <!-- AI library loads lazily on first use via dynamic import -->
 <style>
@@ -847,7 +847,7 @@ canvas{display:block;}
 
 <!-- HEADER -->
 <header>
-  <div class="logo" onclick="resetApp()" style="cursor:pointer;user-select:none;" title="Home">Passport<em>Print</em> Studio</div>
+  <div class="logo" onclick="resetApp()" style="cursor:pointer;user-select:none;" title="Home">Studio <em>Print</em></div>
   <div class="badges">
     <span class="badge badge-green" data-i18n="badge_free">✓ 100% Free</span>
     <span class="badge badge-green" data-i18n="badge_offline">✓ Offline After First Load</span>
@@ -1274,11 +1274,11 @@ canvas{display:block;}
       </div>
       <div class="tut-card-right">
         <div class="tut-card-title" data-i18n="tut5_title">Tool mein API key paste karo</div>
-        <div class="tut-card-desc" data-i18n="tut5_desc">Wapas PassportPrint Studio mein aao. Step 2 (Background Hatao) pe aoge toh upar API Key field dikhega — wahan Ctrl+V se paste karo. Key save ho jayegi automatically.</div>
+        <div class="tut-card-desc" data-i18n="tut5_desc">Wapas Studio Print mein aao. Step 2 (Background Hatao) pe aoge toh upar API Key field dikhega — wahan Ctrl+V se paste karo. Key save ho jayegi automatically.</div>
         <div class="mock-screen" style="background:#161616;border-color:#2c2c2c;">
           <div class="mock-bar" style="background:#0d0d0d;border-color:#2c2c2c;">
             <div class="mock-dots"><div class="mock-dot" style="background:#ff5f57"></div><div class="mock-dot" style="background:#ffbd2e"></div><div class="mock-dot" style="background:#28c840"></div></div>
-            <div class="mock-url" style="background:#1e1e1e;color:#555;">PassportPrint Studio</div>
+            <div class="mock-url" style="background:#1e1e1e;color:#555;">Studio Print</div>
           </div>
           <div class="mock-body">
             <div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">🔑 Remove.bg API Key</div>
@@ -1407,7 +1407,7 @@ const LANG = {
     tut4_title:'Key copy करो',
     tut4_desc:'Popup में एक long key दिखेगी जैसे: "abc123XYZ..." — उसे पूरा copy करो (Ctrl+C). यह key सिर्फ एक बार दिखती है!',
     tut5_title:'Tool में API key paste करो',
-    tut5_desc:'वापस PassportPrint Studio में आओ। Step 2 पे API Key field में Ctrl+V से paste करो। Key automatically save हो जाएगी।',
+    tut5_desc:'वापस Studio Print में आओ। Step 2 पे API Key field में Ctrl+V से paste करो। Key automatically save हो जाएगी।',
     tut_cta_sub:'Tool में वापस जाओ, photo upload करो, और AI magic देखो',
     tut_cta_btn:'← Tool पे वापस जाओ',
   },
@@ -1456,7 +1456,7 @@ const LANG = {
     tut4_title:'Copy your API key',
     tut4_desc:'A long key will appear like: "abc123XYZ..." — select it all and copy (Ctrl+C). This key is shown only once!',
     tut5_title:'Paste the API key in the tool',
-    tut5_desc:'Come back to PassportPrint Studio. On Step 2, paste the key (Ctrl+V) in the API Key field. It saves automatically.',
+    tut5_desc:'Come back to Studio Print. On Step 2, paste the key (Ctrl+V) in the API Key field. It saves automatically.',
     tut_cta_sub:'Go back to the tool, upload a photo, and watch the AI magic',
     tut_cta_btn:'← Go Back to Tool',
   }
@@ -2571,7 +2571,7 @@ function buildSheet(){
   ctx.fillStyle='rgba(0,0,0,0.15)';
   ctx.font=`${Math.round(6/MM2IN*DPI)}px monospace`;
   ctx.fillText(
-    `PassportPrint Studio · ${sheetTotal} photos · ${photoW}×${photoH}mm · 300 DPI · A4`,
+    `Studio Print · ${sheetTotal} photos · ${photoW}×${photoH}mm · 300 DPI · A4`,
     marginPx, a4H-Math.round(4/MM2IN*DPI)
   );
 
@@ -3085,7 +3085,7 @@ async function completePayment(){
         key: order.keyId,
         amount: order.amount,
         currency: order.currency,
-        name:'PassportPrint Studio',
+        name:'Studio Print',
         description:`${p.name} Plan`,
         order_id: order.orderId,
         prefill:{name:user.name, email:user.email},
@@ -3122,7 +3122,7 @@ async function completePayment(){
   // ── UPI fallback (direct link to your VPA) ──
   if(method==='upi'){
     const UPI_VPA=(window.PPS_UPI_VPA||'yourname@upi'); // TODO: replace with your UPI ID
-    const payeeName='PassportPrint Studio';
+    const payeeName='Studio Print';
     const txnRef='PPS'+Date.now();
     const note=encodeURIComponent(`${p.name} Plan - ${user.email}`);
     const upiUrl=`upi://pay?pa=${encodeURIComponent(UPI_VPA)}&pn=${encodeURIComponent(payeeName)}&am=${p.price}&cu=INR&tn=${note}&tr=${txnRef}`;
