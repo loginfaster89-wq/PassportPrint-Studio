@@ -3,10 +3,12 @@
 // Node.js + Express + SQLite + Razorpay + JWT + bcrypt
 // ════════════════════════════════════════════════════════════
 // Endpoints:
-//   POST /api/signup           { name, email, password }        → { token, user }
-//   POST /api/login            { email, password }              → { token, user }
-//   GET  /api/me               (Bearer token)                    → { user }
-//   POST /api/delete-account   (Bearer token)                    → { ok: true }
+//   POST /api/signup                 { name, email, password }        → { token, user }
+//   POST /api/login                  { email, password }              → { token, user }
+//   GET  /api/me                     (Bearer token)                    → { user }
+//   POST /api/delete-account         (Bearer token)                    → { ok: true }
+//   POST /api/send-password-reset-otp { email }                        → { otpSent, email, expiresInSec }
+//   POST /api/reset-password         { email, otp, newPassword }       → { token, user }
 //   POST /api/create-order     (Bearer) { plan: 'weekly'|'monthly' }
 //                                                               → { orderId, amount, currency, keyId }
 //   POST /api/verify-payment   (Bearer) { orderId, paymentId, signature, plan }
@@ -133,6 +135,14 @@ db.exec(`
     expires_at     INTEGER NOT NULL,
     created_at     INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS password_resets (
+    email          TEXT PRIMARY KEY,
+    otp_hash       TEXT NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    expires_at     INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL
+  );
 `);
 
 // ── Razorpay SDK (may throw if keys missing, guard at use site) ──
@@ -202,21 +212,40 @@ function genOtp() {
   // 6-digit zero-padded numeric code.
   return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
-async function sendOtpEmail(to, otp) {
-  if (!mailer) throw new Error('Email service not configured on server');
-  const subject = `Your PassportPrint Studio verification code: ${otp}`;
+function otpEmailBody(otp, purpose) {
+  const minutes = Math.round(OTP_TTL_MS / 60000);
+  const intro = purpose === 'reset'
+    ? 'Use the code below to reset your password.'
+    : 'Use the code below to verify your email address.';
+  const subject = purpose === 'reset'
+    ? `Your PassportPrint Studio password reset code: ${otp}`
+    : `Your PassportPrint Studio verification code: ${otp}`;
   const text =
-`Your PassportPrint Studio verification code is: ${otp}
+`${intro}
 
-This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.
+Code: ${otp}
+
+This code expires in ${minutes} minutes.
 If you did not request this, please ignore this email.`;
   const html = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#0d0d16;color:#e7e7f0;border-radius:12px;">
   <h2 style="margin:0 0 12px;color:#fff;font-weight:700;">PassportPrint <em style="color:#7cc4ff;font-style:normal;">Studio</em></h2>
-  <p style="margin:0 0 16px;color:#bfbfd0;">Use the code below to verify your email address.</p>
+  <p style="margin:0 0 16px;color:#bfbfd0;">${intro}</p>
   <div style="font-family:ui-monospace,Menlo,monospace;font-size:32px;letter-spacing:8px;font-weight:700;background:#1a1a26;border:1px solid #2a2a38;border-radius:10px;padding:16px 20px;text-align:center;color:#fff;">${otp}</div>
-  <p style="margin:16px 0 0;color:#8c8ca0;font-size:12px;">This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes. If you did not request it, you can ignore this email.</p>
+  <p style="margin:16px 0 0;color:#8c8ca0;font-size:12px;">This code expires in ${minutes} minutes. If you did not request it, you can ignore this email.</p>
 </div>`;
+  return { subject, text, html };
+}
+
+async function sendOtpEmail(to, otp) {
+  if (!mailer) throw new Error('Email service not configured on server');
+  const { subject, text, html } = otpEmailBody(otp, 'signup');
+  await mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
+}
+
+async function sendPasswordResetEmail(to, otp) {
+  if (!mailer) throw new Error('Email service not configured on server');
+  const { subject, text, html } = otpEmailBody(otp, 'reset');
   await mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
 }
 
@@ -422,6 +451,119 @@ app.post('/api/login', authLimiter, async (req, res) => {
 
 app.get('/api/me', authRequired, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+// ── Password reset flow (OTP-verified) ─────────────────────────────────────
+// Step 1: /api/send-password-reset-otp — verifies that the email belongs to a
+// real user, stores a hashed OTP, and emails it.
+// Step 2: /api/reset-password — checks the OTP and sets a new password,
+// returning a fresh JWT so the user is logged in immediately.
+app.post('/api/send-password-reset-otp', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!validGmail(email)) {
+      return res.status(400).json({ error: 'Only @gmail.com addresses are accepted.' });
+    }
+    if (!mailer) {
+      return res.status(503).json({ error: 'Email service is not configured on the server yet. Please try again later.' });
+    }
+
+    const lower = email.trim().toLowerCase();
+    const user = db.prepare('SELECT id FROM users WHERE email = ?').get(lower);
+    // For privacy, do not reveal whether the account exists. Pretend we sent
+    // a code either way — but we only actually send/store it when the user
+    // exists so attackers cannot enumerate Gmail addresses.
+    if (!user) {
+      return res.json({
+        otpSent: true,
+        email: lower,
+        expiresInSec: Math.floor(OTP_TTL_MS / 1000),
+      });
+    }
+
+    const otp = genOtp();
+    const otpHash = await bcrypt.hash(otp, 8);
+    const now = Date.now();
+    const expiresAt = now + OTP_TTL_MS;
+    db.prepare(`
+      INSERT INTO password_resets (email, otp_hash, attempts, expires_at, created_at)
+      VALUES (?, ?, 0, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        otp_hash   = excluded.otp_hash,
+        attempts   = 0,
+        expires_at = excluded.expires_at,
+        created_at = excluded.created_at
+    `).run(lower, otpHash, expiresAt, now);
+
+    try {
+      await sendPasswordResetEmail(lower, otp);
+    } catch (ex) {
+      console.error('SMTP send (reset) failed:', ex && ex.message);
+      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      return res.status(502).json({
+        error: 'We could not deliver the reset email. Please try again in a moment.',
+      });
+    }
+    res.json({
+      otpSent: true,
+      email: lower,
+      expiresInSec: Math.floor(OTP_TTL_MS / 1000),
+    });
+  } catch (e) {
+    console.error('send-password-reset-otp error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/reset-password', authLimiter, async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body || {};
+    if (!validGmail(email)) return res.status(400).json({ error: 'Invalid email.' });
+    const code = String(otp || '').trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the 6-digit code we emailed you.' });
+    if (!newPassword || newPassword.length < 6 || newPassword.length > 200) {
+      return res.status(400).json({ error: 'Password must be 6–200 characters.' });
+    }
+
+    const lower = email.trim().toLowerCase();
+    const pending = db.prepare('SELECT * FROM password_resets WHERE email = ?').get(lower);
+    if (!pending) return res.status(400).json({ error: 'No pending reset. Please request a new code.' });
+
+    if (pending.expires_at < Date.now()) {
+      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      return res.status(400).json({ error: 'This code has expired. Please request a new one.' });
+    }
+    if (pending.attempts >= 5) {
+      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
+    }
+
+    const match = await bcrypt.compare(code, pending.otp_hash);
+    if (!match) {
+      db.prepare('UPDATE password_resets SET attempts = attempts + 1 WHERE email = ?').run(lower);
+      return res.status(400).json({ error: 'Wrong code. Please try again.' });
+    }
+
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(lower);
+    if (!user) {
+      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 11);
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, user.id);
+      db.prepare('DELETE FROM password_resets WHERE email = ?').run(lower);
+    });
+    tx();
+
+    const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    const token = signToken(fresh.id);
+    res.json({ token, user: publicUser(fresh) });
+  } catch (e) {
+    console.error('reset-password error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // Permanently delete the authenticated user's account and all associated data.
