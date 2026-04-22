@@ -1,7 +1,7 @@
 {
-  "name": "passportprint-backend",
+  "name": "studioprint-backend",
   "version": "1.0.0",
-  "description": "Backend API for PassportPrint Studio: auth + Razorpay payments",
+  "description": "Backend API for Studio Print: auth + Razorpay payments",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

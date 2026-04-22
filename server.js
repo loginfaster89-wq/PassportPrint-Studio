@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// PassportPrint Studio — Backend API
+// Studio Print — Backend API
 // Node.js + Express + libSQL (Turso / local SQLite) + Razorpay + JWT + bcrypt
 // ════════════════════════════════════════════════════════════
 // Endpoints:
@@ -935,7 +935,7 @@ app.use((err, req, res, next) => {
     await initDb();
     app.listen(PORT, () => {
       const host = (LIBSQL_URL.startsWith('file:') ? LIBSQL_URL : (LIBSQL_URL.split('//')[1] || LIBSQL_URL).split('.')[0]);
-      console.log(`✓ PassportPrint backend listening on port ${PORT}`);
+      console.log(`✓ Studio Print backend listening on port ${PORT}`);
       console.log(`  Razorpay: ${razorpay ? 'configured' : 'NOT configured'}`);
       console.log(`  DB:       ${host}`);
       console.log(`  CORS:     ${CORS_ORIGINS.join(', ')}`);
