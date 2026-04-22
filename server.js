@@ -24,6 +24,7 @@
 require('dotenv').config();
 const express       = require('express');
 const cors          = require('cors');
+const compression   = require('compression');
 const crypto        = require('crypto');
 const bcrypt        = require('bcryptjs');
 const jwt           = require('jsonwebtoken');
@@ -270,6 +271,8 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
 // ── Express app ──
 const app = express();
 app.set('trust proxy', 1);
+// gzip JSON responses; lightweight endpoints (<1 KB) skip compression.
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: '256kb' }));
 app.use(cors({
   origin: (origin, cb) => {
@@ -282,9 +285,23 @@ app.use(cors({
   credentials: false,
 }));
 
-// Rate limits
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true });
-const apiLimiter  = rateLimit({ windowMs:  1 * 60 * 1000, max: 60 });
+// Rate limits. `apiLimiter` applies to every /api/* route — a single signed-in
+// user can easily burn 10–20 requests/min just clicking around (plan info,
+// download-status polling, warm-up pings from the homepage), so 60/min was too
+// tight under real traffic. The stricter `authLimiter` is still applied on
+// every credential-sensitive route below.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const apiLimiter  = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: parseInt(process.env.API_RATE_LIMIT_PER_MIN || '180', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 app.use('/api/', apiLimiter);
 
 // ── Helpers ──
