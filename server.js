@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// PassportPrint Studio — Backend API
+// Studio Print — Backend API
 // Node.js + Express + libSQL (Turso / local SQLite) + Razorpay + JWT + bcrypt
 // ════════════════════════════════════════════════════════════
 // Endpoints:
@@ -46,7 +46,9 @@ const CORS_ORIGINS        = (process.env.CORS_ORIGINS || '*').split(',').map(s =
 // previews out of the API. Extend this list if new official frontends
 // (e.g. a custom domain) are added.
 const ALWAYS_ALLOWED_ORIGIN_PATTERNS = [
-  /^https:\/\/studioprint\.netlify\.app$/,              // production Netlify site
+  /^https:\/\/studioprint\.pages\.dev$/,                // production Cloudflare Pages site
+  /^https:\/\/[a-f0-9]+\.studioprint\.pages\.dev$/,     // Cloudflare Pages preview deploys
+  /^https:\/\/studioprint\.netlify\.app$/,              // legacy Netlify site
   /^https:\/\/[a-z0-9-]+--studioprint\.netlify\.app$/,  // Netlify deploy previews / branch deploys
   /^https:\/\/loginfaster89-wq\.github\.io$/,           // legacy GitHub Pages site
 ];
@@ -935,7 +937,7 @@ app.use((err, req, res, next) => {
     await initDb();
     app.listen(PORT, () => {
       const host = (LIBSQL_URL.startsWith('file:') ? LIBSQL_URL : (LIBSQL_URL.split('//')[1] || LIBSQL_URL).split('.')[0]);
-      console.log(`✓ PassportPrint backend listening on port ${PORT}`);
+      console.log(`✓ Studio Print backend listening on port ${PORT}`);
       console.log(`  Razorpay: ${razorpay ? 'configured' : 'NOT configured'}`);
       console.log(`  DB:       ${host}`);
       console.log(`  CORS:     ${CORS_ORIGINS.join(', ')}`);
