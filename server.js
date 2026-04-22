@@ -46,7 +46,9 @@ const CORS_ORIGINS        = (process.env.CORS_ORIGINS || '*').split(',').map(s =
 // previews out of the API. Extend this list if new official frontends
 // (e.g. a custom domain) are added.
 const ALWAYS_ALLOWED_ORIGIN_PATTERNS = [
-  /^https:\/\/studioprint\.netlify\.app$/,              // production Netlify site
+  /^https:\/\/studioprint\.pages\.dev$/,                // production Cloudflare Pages site
+  /^https:\/\/[a-f0-9]+\.studioprint\.pages\.dev$/,     // Cloudflare Pages preview deploys
+  /^https:\/\/studioprint\.netlify\.app$/,              // legacy Netlify site
   /^https:\/\/[a-z0-9-]+--studioprint\.netlify\.app$/,  // Netlify deploy previews / branch deploys
   /^https:\/\/loginfaster89-wq\.github\.io$/,           // legacy GitHub Pages site
 ];
