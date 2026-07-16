@@ -133,7 +133,39 @@ const SMTP_SECURE = (process.env.SMTP_SECURE || 'true').toLowerCase() === 'true'
 const SMTP_USER   = process.env.SMTP_USER   || '';
 const SMTP_PASS   = process.env.SMTP_PASS   || '';
 const SMTP_FROM   = process.env.SMTP_FROM   || (SMTP_USER ? `Studio Print <${SMTP_USER}>` : '');
+const SMTP_CONNECTION_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.SMTP_CONNECTION_TIMEOUT_MS || '15000', 10)
+);
+const SMTP_GREETING_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.SMTP_GREETING_TIMEOUT_MS || '10000', 10)
+);
+const SMTP_SOCKET_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.SMTP_SOCKET_TIMEOUT_MS || '20000', 10)
+);
+const SMTP_DNS_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.SMTP_DNS_TIMEOUT_MS || '10000', 10)
+);
 const OTP_TTL_MS  = Math.max(60, parseInt(process.env.OTP_TTL_SEC || '600', 10)) * 1000;
+
+function smtpErrorSummary(error) {
+  if (!error || typeof error !== 'object') return String(error || 'Unknown SMTP error');
+
+  const fields = [
+    error.message ? `message=${error.message}` : '',
+    error.code ? `code=${error.code}` : '',
+    error.command ? `command=${error.command}` : '',
+    error.responseCode ? `responseCode=${error.responseCode}` : '',
+    error.syscall ? `syscall=${error.syscall}` : '',
+    error.address ? `address=${error.address}` : '',
+    error.port ? `port=${error.port}` : '',
+  ].filter(Boolean);
+
+  return fields.join(' ');
+}
 
 let mailer = null;
 if (SMTP_USER && SMTP_PASS) {
@@ -142,10 +174,24 @@ if (SMTP_USER && SMTP_PASS) {
     port: SMTP_PORT,
     secure: SMTP_SECURE,
     auth: { user: SMTP_USER, pass: SMTP_PASS.replace(/\s+/g, '') },
+    connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+    socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
+    dnsTimeout: SMTP_DNS_TIMEOUT_MS,
+    disableFileAccess: true,
+    disableUrlAccess: true,
   });
+
+  const smtpVerifyStartedAt = Date.now();
   mailer.verify().then(
-    () => console.log(`✓ SMTP ready (${SMTP_USER} via ${SMTP_HOST}:${SMTP_PORT})`),
-    (e) => console.warn('⚠️  SMTP verify failed:', e.message)
+    () => console.log(
+      `✓ SMTP ready (${SMTP_USER} via ${SMTP_HOST}:${SMTP_PORT}) ` +
+      `in ${Date.now() - smtpVerifyStartedAt}ms`
+    ),
+    (error) => console.warn(
+      `⚠️  SMTP verify failed after ${Date.now() - smtpVerifyStartedAt}ms:`,
+      smtpErrorSummary(error)
+    )
   );
 } else {
   console.warn('⚠️  SMTP not configured — OTP email verification will fail until SMTP_USER and SMTP_PASS are set.');
@@ -413,16 +459,41 @@ If you did not request this, please ignore this email.`;
   return { subject, text, html };
 }
 
-async function sendOtpEmail(to, otp) {
+async function sendEmailWithDiagnostics(message, purpose) {
   if (!mailer) throw new Error('Email service not configured on server');
+
+  const startedAt = Date.now();
+  try {
+    const info = await mailer.sendMail(message);
+    console.log(
+      `✓ SMTP ${purpose} email accepted in ${Date.now() - startedAt}ms` +
+      (info && info.messageId ? ` messageId=${info.messageId}` : '')
+    );
+    return info;
+  } catch (error) {
+    const elapsedMs = Date.now() - startedAt;
+    const wrapped = new Error(
+      `SMTP ${purpose} email failed after ${elapsedMs}ms: ${smtpErrorSummary(error)}`
+    );
+    wrapped.cause = error;
+    throw wrapped;
+  }
+}
+
+async function sendOtpEmail(to, otp) {
   const { subject, text, html } = otpEmailBody(otp, 'signup');
-  await mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
+  return sendEmailWithDiagnostics(
+    { from: SMTP_FROM, to, subject, text, html },
+    'signup OTP'
+  );
 }
 
 async function sendPasswordResetEmail(to, otp) {
-  if (!mailer) throw new Error('Email service not configured on server');
   const { subject, text, html } = otpEmailBody(otp, 'reset');
-  await mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
+  return sendEmailWithDiagnostics(
+    { from: SMTP_FROM, to, subject, text, html },
+    'password reset'
+  );
 }
 
 function effectivePlan(user) {
@@ -584,7 +655,7 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     try {
       await sendOtpEmail(lower, otp);
     } catch (ex) {
-      console.error('SMTP send failed:', ex && ex.message);
+      console.error('SMTP send failed:', smtpErrorSummary(ex && (ex.cause || ex)));
       // Roll back pending signup so the user can retry cleanly.
       await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       return res.status(502).json({
