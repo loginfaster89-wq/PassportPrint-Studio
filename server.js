@@ -127,6 +127,19 @@ if (!GOOGLE_CLIENT_IDS.length) {
 const fetchFn = (typeof fetch === 'function') ? fetch : require('node-fetch');
 
 // ── SMTP / OTP ──
+// Brevo HTTPS transactional email API. When configured, Brevo is the
+// primary provider and SMTP is not initialized, avoiding Render SMTP
+// connection timeouts.
+const BREVO_API_URL = process.env.BREVO_API_URL || 'https://api.brevo.com/v3/smtp/email';
+const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
+const BREVO_SENDER_EMAIL = (process.env.BREVO_SENDER_EMAIL || '').trim();
+const BREVO_SENDER_NAME = (process.env.BREVO_SENDER_NAME || 'Studio Print').trim();
+const BREVO_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.BREVO_TIMEOUT_MS || '20000', 10)
+);
+const BREVO_CONFIGURED = Boolean(BREVO_API_KEY && BREVO_SENDER_EMAIL);
+
 const SMTP_HOST   = process.env.SMTP_HOST   || 'smtp.gmail.com';
 const SMTP_PORT   = parseInt(process.env.SMTP_PORT || '465', 10);
 const SMTP_SECURE = (process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
@@ -168,7 +181,9 @@ function smtpErrorSummary(error) {
 }
 
 let mailer = null;
-if (SMTP_USER && SMTP_PASS) {
+if (BREVO_CONFIGURED) {
+  console.log(`✓ Brevo email API configured (${BREVO_SENDER_EMAIL})`);
+} else if (SMTP_USER && SMTP_PASS) {
   mailer = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
@@ -459,21 +474,112 @@ If you did not request this, please ignore this email.`;
   return { subject, text, html };
 }
 
-async function sendEmailWithDiagnostics(message, purpose) {
-  if (!mailer) throw new Error('Email service not configured on server');
+function isEmailConfigured() {
+  return BREVO_CONFIGURED || Boolean(mailer);
+}
 
-  const startedAt = Date.now();
+function emailProviderName() {
+  if (BREVO_CONFIGURED) return 'brevo';
+  if (mailer) return 'smtp';
+  return 'none';
+}
+
+async function sendBrevoEmail(message, purpose) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BREVO_TIMEOUT_MS);
+
   try {
-    const info = await mailer.sendMail(message);
+    const response = await fetchFn(BREVO_API_URL, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'api-key': BREVO_API_KEY,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: {
+          name: BREVO_SENDER_NAME,
+          email: BREVO_SENDER_EMAIL,
+        },
+        to: [{ email: message.to }],
+        subject: message.subject,
+        htmlContent: message.html,
+        tags: [
+          purpose === 'signup OTP'
+            ? 'studio-print-signup-otp'
+            : 'studio-print-password-reset',
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    const responseText = await response.text();
+    let responseBody = null;
+    try {
+      responseBody = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseBody = null;
+    }
+
+    if (!response.ok) {
+      const providerMessage =
+        responseBody && typeof responseBody.message === 'string'
+          ? responseBody.message
+          : responseText.slice(0, 300) || 'Unknown Brevo API error';
+      const error = new Error(`Brevo HTTP ${response.status}: ${providerMessage}`);
+      error.code = 'EBREVO';
+      error.command = 'BREVO_API';
+      error.responseCode = response.status;
+      throw error;
+    }
+
+    return {
+      messageId:
+        responseBody && typeof responseBody.messageId === 'string'
+          ? responseBody.messageId
+          : '',
+      provider: 'brevo',
+    };
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      const timeoutError = new Error(
+        `Brevo request timed out after ${BREVO_TIMEOUT_MS}ms`
+      );
+      timeoutError.code = 'ETIMEDOUT';
+      timeoutError.command = 'BREVO_API';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendEmailWithDiagnostics(message, purpose) {
+  if (!isEmailConfigured()) {
+    throw new Error('Email service not configured on server');
+  }
+
+  const provider = emailProviderName();
+  const startedAt = Date.now();
+
+  try {
+    const info = BREVO_CONFIGURED
+      ? await sendBrevoEmail(message, purpose)
+      : await mailer.sendMail(message);
+
     console.log(
-      `✓ SMTP ${purpose} email accepted in ${Date.now() - startedAt}ms` +
+      `✓ ${provider === 'brevo' ? 'Brevo' : 'SMTP'} ${purpose} email accepted ` +
+      `in ${Date.now() - startedAt}ms` +
       (info && info.messageId ? ` messageId=${info.messageId}` : '')
     );
     return info;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
+    const providerLabel = provider === 'brevo' ? 'Brevo' : 'SMTP';
     const wrapped = new Error(
-      `SMTP ${purpose} email failed after ${elapsedMs}ms: ${smtpErrorSummary(error)}`
+      `${providerLabel} ${purpose} email failed after ${elapsedMs}ms: ` +
+      smtpErrorSummary(error)
     );
     wrapped.cause = error;
     throw wrapped;
@@ -594,6 +700,9 @@ app.get('/health', (req, res) => {
     ok: true,
     razorpayConfigured: !!razorpay,
     googleSignInConfigured: GOOGLE_CLIENT_IDS.length > 0,
+    emailConfigured: isEmailConfigured(),
+    emailProvider: emailProviderName(),
+    brevoConfigured: BREVO_CONFIGURED,
     smtpConfigured: !!mailer,
   });
 });
@@ -625,7 +734,7 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     if (!password || password.length < 6 || password.length > 200) {
       return res.status(400).json({ error: 'Password must be 6–200 characters.' });
     }
-    if (!mailer) {
+    if (!isEmailConfigured()) {
       return res.status(503).json({ error: 'Email service is not configured on the server yet. Please try again later.' });
     }
 
@@ -655,7 +764,10 @@ app.post('/api/send-signup-otp', authLimiter, async (req, res) => {
     try {
       await sendOtpEmail(lower, otp);
     } catch (ex) {
-      console.error('SMTP send failed:', smtpErrorSummary(ex && (ex.cause || ex)));
+      console.error(
+        'Email send failed:',
+        smtpErrorSummary(ex && (ex.cause || ex))
+      );
       // Roll back pending signup so the user can retry cleanly.
       await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(lower);
       return res.status(502).json({
@@ -847,7 +959,7 @@ app.post('/api/send-password-reset-otp', authLimiter, async (req, res) => {
     if (!validGmail(email)) {
       return res.status(400).json({ error: 'Only @gmail.com addresses are accepted.' });
     }
-    if (!mailer) {
+    if (!isEmailConfigured()) {
       return res.status(503).json({ error: 'Email service is not configured on the server yet. Please try again later.' });
     }
 
