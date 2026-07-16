@@ -52,6 +52,7 @@ const ALWAYS_ALLOWED_ORIGIN_PATTERNS = [
   /^https:\/\/studioprint\.netlify\.app$/,              // legacy Netlify site
   /^https:\/\/[a-z0-9-]+--studioprint\.netlify\.app$/,  // Netlify deploy previews / branch deploys
   /^https:\/\/loginfaster89-wq\.github\.io$/,           // legacy GitHub Pages site
+  /^https:\/\/studio-print\.loginfaster89\.workers\.dev$/, // canonical Cloudflare Worker
 ];
 function isAlwaysAllowedOrigin(origin) {
   return typeof origin === 'string' &&
@@ -74,6 +75,15 @@ const DAILY_LIMITS = {
   free:    parseInt(process.env.FREE_DAILY_SHEETS    || '2', 10),
   weekly:  parseInt(process.env.WEEKLY_DAILY_SHEETS  || '0', 10),
   monthly: parseInt(process.env.MONTHLY_DAILY_SHEETS || '0', 10),
+};
+
+// Strict final-output limits. Each tool has its own daily database counter.
+// 0 = unlimited. Free defaults to one Print/Download claim per tool per day.
+const TOOL_IDS = new Set(['forms', 'id-print', 'passport-photo']);
+const TOOL_DAILY_LIMITS = {
+  free:    parseInt(process.env.FREE_DAILY_TOOL_USES    || '1', 10),
+  weekly:  parseInt(process.env.WEEKLY_DAILY_TOOL_USES  || '0', 10),
+  monthly: parseInt(process.env.MONTHLY_DAILY_TOOL_USES || '0', 10),
 };
 
 // Comma-separated list of admin emails. Anyone who signs in with one of
@@ -241,6 +251,22 @@ async function initDb() {
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_downloads_user_day ON downloads_daily(user_id, day_key);
+
+    CREATE TABLE IF NOT EXISTS tool_usage_daily (
+      user_id    INTEGER NOT NULL,
+      tool_id    TEXT    NOT NULL,
+      day_key    TEXT    NOT NULL,
+      count      INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(user_id, tool_id, day_key),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_user_day
+      ON tool_usage_daily(user_id, tool_id, day_key);
+
+    INSERT OR IGNORE INTO tool_usage_daily (user_id, tool_id, day_key, count, updated_at)
+      SELECT user_id, 'passport-photo', day_key, count, updated_at
+      FROM downloads_daily;
 
     CREATE TABLE IF NOT EXISTS pending_signups (
       email          TEXT PRIMARY KEY,
@@ -439,6 +465,57 @@ function serializeSnapshot(snap) {
     dayKey:    snap.dayKey,
   };
 }
+
+function normalizeToolId(value) {
+  const toolId = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return TOOL_IDS.has(toolId) ? toolId : null;
+}
+
+async function getToolUsageSnapshot(user, toolId) {
+  const normalizedToolId = normalizeToolId(toolId);
+  if (!normalizedToolId) throw new Error('Invalid tool id');
+
+  const plan = effectivePlan(user);
+  const limit = Number.isFinite(TOOL_DAILY_LIMITS[plan]) ? TOOL_DAILY_LIMITS[plan] : 0;
+  const unlimited = limit === 0;
+  const dayKey = dayKeyFor(Date.now());
+  const row = await db.prepare(
+    'SELECT count FROM tool_usage_daily WHERE user_id = ? AND tool_id = ? AND day_key = ?'
+  ).get(user.id, normalizedToolId, dayKey);
+  const used = row ? row.count : 0;
+  const remaining = unlimited ? Infinity : Math.max(0, limit - used);
+  return { toolId: normalizedToolId, plan, limit, used, remaining, unlimited, dayKey };
+}
+
+function serializeToolUsageSnapshot(snap) {
+  return {
+    toolId: snap.toolId,
+    plan: snap.plan,
+    limit: snap.limit,
+    used: snap.used,
+    remaining: snap.unlimited ? null : snap.remaining,
+    unlimited: snap.unlimited,
+    dayKey: snap.dayKey,
+  };
+}
+
+const consumeToolUsage = db.transaction(async (user, toolId) => {
+  const snap = await getToolUsageSnapshot(user, toolId);
+  if (snap.unlimited) return { blocked: false, snapshot: snap };
+  if (snap.used >= snap.limit) return { blocked: true, snapshot: snap };
+
+  await db.prepare(`
+    INSERT INTO tool_usage_daily (user_id, tool_id, day_key, count, updated_at)
+    VALUES (?, ?, ?, 1, ?)
+    ON CONFLICT(user_id, tool_id, day_key)
+    DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
+  `).run(user.id, snap.toolId, snap.dayKey, Date.now());
+
+  return {
+    blocked: false,
+    snapshot: await getToolUsageSnapshot(user, snap.toolId),
+  };
+});
 
 // ── Routes ──
 app.get('/health', (req, res) => {
@@ -808,6 +885,7 @@ app.post('/api/delete-account', authRequired, async (req, res) => {
     const email = req.user.email;
     await db.transaction(async () => {
       await db.prepare('DELETE FROM downloads_daily WHERE user_id = ?').run(uid);
+      await db.prepare('DELETE FROM tool_usage_daily WHERE user_id = ?').run(uid);
       await db.prepare('DELETE FROM payments WHERE user_id = ?').run(uid);
       await db.prepare('DELETE FROM pending_signups WHERE email = ?').run(email);
       await db.prepare('DELETE FROM users WHERE id = ?').run(uid);
@@ -819,10 +897,45 @@ app.post('/api/delete-account', authRequired, async (req, res) => {
   }
 });
 
+app.get('/api/tool-usage/:toolId', authRequired, async (req, res) => {
+  try {
+    const toolId = normalizeToolId(req.params.toolId);
+    if (!toolId) return res.status(400).json({ error: 'Unknown Studio Print tool.' });
+    const snap = await getToolUsageSnapshot(req.user, toolId);
+    res.json(serializeToolUsageSnapshot(snap));
+  } catch (e) {
+    console.error('tool-usage-status error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/tool-usage/:toolId/consume', authRequired, async (req, res) => {
+  try {
+    const toolId = normalizeToolId(req.params.toolId);
+    if (!toolId) return res.status(400).json({ error: 'Unknown Studio Print tool.' });
+
+    const result = await consumeToolUsage(req.user, toolId);
+    const payload = serializeToolUsageSnapshot(result.snapshot);
+    if (result.blocked) {
+      return res.status(429).json({
+        ok: false,
+        error: 'Daily free limit reached',
+        ...payload,
+      });
+    }
+
+    res.json({ ok: true, ...payload });
+  } catch (e) {
+    console.error('tool-usage-consume error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Legacy Passport aliases.
 app.get('/api/download-status', authRequired, async (req, res) => {
   try {
-    const snap = await getDownloadSnapshot(req.user);
-    res.json(serializeSnapshot(snap));
+    const snap = await getToolUsageSnapshot(req.user, 'passport-photo');
+    res.json(serializeToolUsageSnapshot(snap));
   } catch (e) {
     console.error('download-status error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -831,32 +944,29 @@ app.get('/api/download-status', authRequired, async (req, res) => {
 
 app.post('/api/track-download', authRequired, async (req, res) => {
   try {
-    const snap = await getDownloadSnapshot(req.user);
-
-    if (snap.unlimited) {
-      return res.json({ ok: true, ...serializeSnapshot(snap) });
+    const result = await consumeToolUsage(req.user, 'passport-photo');
+    const payload = serializeToolUsageSnapshot(result.snapshot);
+    if (result.blocked) {
+      return res.status(429).json({ ok: false, error: 'Daily free limit reached', ...payload });
     }
-
-    if (snap.used >= snap.limit) {
-      return res.status(429).json({
-        ok: false,
-        error: 'Daily free limit reached',
-        ...serializeSnapshot(snap),
-      });
-    }
-
-    const now = Date.now();
-    await db.prepare(`
-      INSERT INTO downloads_daily (user_id, day_key, count, updated_at)
-      VALUES (?, ?, 1, ?)
-      ON CONFLICT(user_id, day_key)
-      DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
-    `).run(req.user.id, snap.dayKey, now);
-
-    const updated = await getDownloadSnapshot(req.user);
-    res.json({ ok: true, ...serializeSnapshot(updated) });
+    res.json({ ok: true, ...payload });
   } catch (e) {
     console.error('track-download error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Legacy ID Print alias.
+app.post('/api/consume-sheet', authRequired, async (req, res) => {
+  try {
+    const result = await consumeToolUsage(req.user, 'id-print');
+    const payload = serializeToolUsageSnapshot(result.snapshot);
+    if (result.blocked) {
+      return res.status(429).json({ ok: false, error: 'Daily free limit reached', ...payload });
+    }
+    res.json({ ok: true, ...payload });
+  } catch (e) {
+    console.error('consume-sheet error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
